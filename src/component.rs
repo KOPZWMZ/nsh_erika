@@ -1,7 +1,7 @@
 //! `erika.video`：只要画面、不带控制条的原生控件。
 //!
 //! 它就是一个 `gtk::Picture`：帧由引擎线程导出成线性 dma-buf，tick 回调里导入成
-//! `GdkDmabufTexture` 贴上去（那套在 [`crate::frames`] 里，和内置控件共用）。
+//! `GdkDmabufTexture` 贴上去（那套在 [`crate::frames`] 里）。
 //!
 //! ## 控件不自建引擎
 //!

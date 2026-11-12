@@ -72,14 +72,11 @@ impl FrameSlot {
 
 /// 一帧的请求参数（渲染层 → 引擎）。
 ///
-/// `canvas` 是控件自己的物理尺寸（`gtk::Picture` 的宽高 × `scale_factor`）；`export`
-/// 是引擎真正出帧的尺寸 —— 视频宽高比在画布里的**内接矩形**（见
+/// `export` 是引擎真正出帧的尺寸 —— 视频宽高比在画布里的**内接矩形**（见
 /// `component.rs::export_size`）。有 letterbox 时两者不同：竖版控件里放 16:9 的片子，
 /// 导出尺寸比画布小一半以上。`ContentFit::Contain` 负责把这张图摆回画布中间。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameRequest {
-    /// 画布（控件）的物理像素尺寸。
-    pub canvas: (u32, u32),
     /// 引擎出帧尺寸（画布内接视频比例后的尺寸）。
     pub export: (u32, u32),
     /// DPI 缩放：物理像素 / 逻辑像素。
@@ -89,7 +86,6 @@ pub struct FrameRequest {
 impl Default for FrameRequest {
     fn default() -> Self {
         Self {
-            canvas: (0, 0),
             export: (0, 0),
             scale: 1.0,
         }

@@ -75,7 +75,7 @@ pub(crate) enum ErikaCmd {
 /// 这些协调方法在 presenter 上是 private,直连 `erika::Player` 会音画不同步
 /// (实测:直连 `set_playback_rate(2.0)` 画面变快、声音不变)。
 pub(crate) enum PlaybackCmd {
-    /// 打开媒体(换片)。`session` 会 +1。
+    /// 打开媒体(换片)。
     Open(MediaRequest),
     /// 停播:位置归 0、画面清空,**媒体仍然开着**。
     Stop,

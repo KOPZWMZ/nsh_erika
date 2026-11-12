@@ -1,24 +1,41 @@
-//! 引擎侧的按秒速率探针（`NSH_ERIKA_TRACE=1`）—— **只用来诊断，不参与逻辑**。
+//! **所有诊断集中在这里**（开关：`NSH_ERIKA_TRACE=1`，任何非空、非 `0` 的值）。
 //!
-//! 用途：卡顿时分清"是谁在降频"。两行一起看就够：
+//! ⚠️ **这个模块不参与任何逻辑**。关掉时每个调用点只剩一次 `Option::is_some/as_mut`
+//! 判断：没有分配、没有时间查询、没有日志格式化。往里加东西时守住这条 ——
+//! 需要"每帧都算"的观测量不算诊断，不该放这里。
+//!
+//! 三个探针，各回答一个问题：
+//!
+//! | 探针 | 在哪用 | 回答 |
+//! |---|---|---|
+//! | [`RateProbe`] | `engine.rs` 的 `run` 循环 | 引擎线程每秒醒几次、这一轮出帧了没有 |
+//! | [`TimingsProbe`] | `engine/render.rs::pump_frame` | erika 内部各阶段耗时（pump/sub/video/audio/danmaku/render） |
+//! | [`GtkTickProbe`] | `frames.rs` 的 tick 回调 | GTK 每秒 tick/paint 几次、音频写入量、队列深度、最大间隔 |
+//!
+//! 两行一起看就能分清"是谁在降频"：
 //!
 //! ```text
 //! NSH_ERIKA_TRACE=1 nsh run
 //! [nsh-erika] engine tick ≈100/s render=true has_media=true
-//! erika.video: tick 1672x941 export=1672x941 gen=42 painted=42 has_frame=true state=Playing …
+//! [nsh-erika] gtk tick ≈60/s paint ≈60/s frames ≈60/s audio≈48.0k/s queued=118ms maxgap=18ms
 //! ```
 //!
-//! 引擎线程每 10ms（`IDLE`）醒一次做轮询，`render` 才是"这一轮真的出帧了没有"：
+//! - `engine tick` 在、`gtk tick` 不出现 → tick 回调停了，问题在 GTK 那一侧；
+//! - `render=false has_media=true` → 控件没在要帧（最小化 / 被盖住 / GSK 限频），
+//!   引擎只跑保活泵（每 50ms 一次 `render_tick`）：画面停、声音继续，这是预期行为；
+//! - 两个都在但 `frames < tick` → 引擎出帧跟不上，看 `耗时 …` 那行（[`TimingsProbe`]）。
 //!
-//! - `render=false has_media=true`：控件没在要帧（最小化 / 被盖住 / GSK 把 tick 限频），
-//!   引擎只跑保活泵（每 50ms 一次 `render_tick`，喂音频不发帧）—— 画面停、声音继续，
-//!   这是预期行为，不是卡死；
-//! - 第一行一直在、第二行（`erika.video: tick …`）不出现：tick 回调本身停了，
-//!   问题在 GTK 那一侧。
-//!
-//! 同一个变量还会让引擎每 60 帧打一行各阶段耗时（见 `engine/render.rs::probe_timings`）。
+//! 另外 `frames.rs` 里还有两条**只为确认"有没有出画"**的一次性日志（`第一帧 dma-buf …`）
+//! 和一次性告警（导入失败 / 导出失败 / 保活失败）—— 那些不是探针，见各自的注释。
 
 use std::time::{Duration, Instant};
+
+/// 统一的开关判断：`NSH_ERIKA_TRACE=1`（任何非空、非 `0` 的值）。
+pub(crate) fn enabled() -> bool {
+    std::env::var_os("NSH_ERIKA_TRACE")
+        .map(|value| !value.is_empty() && value != "0")
+        .unwrap_or(false)
+}
 
 /// 一个"每秒打一行"的计数器。
 pub(crate) struct RateProbe {
@@ -28,14 +45,11 @@ pub(crate) struct RateProbe {
 }
 
 impl RateProbe {
-    /// `NSH_ERIKA_TRACE=1`（任何非空、非 `0` 的值）时返回 `Some`，否则 `None`。
+    /// 开关打开时返回 `Some`，否则 `None`。
     ///
     /// 关掉时调用点只剩一次 `Option::as_mut()` 判断，没有分配、没有时间查询。
     pub(crate) fn from_env(label: &'static str) -> Option<Self> {
-        let on = std::env::var_os("NSH_ERIKA_TRACE")
-            .map(|value| !value.is_empty() && value != "0")
-            .unwrap_or(false);
-        on.then(|| Self {
+        enabled().then(|| Self {
             label,
             started: Instant::now(),
             count: 0,
@@ -53,5 +67,156 @@ impl RateProbe {
         eprintln!("[nsh-erika] {} ≈{rate:.0}/s {}", self.label, detail());
         self.started = Instant::now();
         self.count = 0;
+    }
+}
+
+/// 每 60 次出帧打一行 erika 自己记的各阶段耗时（毫秒）。
+///
+/// 引擎线程吃满 CPU 时，这一行直接指出是字幕光栅、视频上传、弹幕排版还是合成。
+pub(crate) struct TimingsProbe {
+    count: u64,
+}
+
+impl TimingsProbe {
+    pub(crate) fn from_env() -> Option<Self> {
+        enabled().then_some(Self { count: 0 })
+    }
+
+    /// 记一次出帧；够 60 次就取一次快照打一行。
+    ///
+    /// 开销：仅在打印那一帧克隆一次 `runtime_snapshot()`。
+    pub(crate) fn tick(&mut self, presenter: &erika::presenter::PresenterRuntime) {
+        self.count += 1;
+        if self.count % 60 != 0 {
+            return;
+        }
+        let snapshot = presenter.runtime_snapshot();
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+        log::info!(
+            "erika.video: 耗时 pump={:.2} sub={:.2} video={:.2} audio={:.2} danmaku={:.2} render={:.2} total={:.2} (ms)",
+            ms(snapshot.last_pump_duration),
+            ms(snapshot.last_subtitle_pump_duration),
+            ms(snapshot.last_video_pump_duration),
+            ms(snapshot.last_audio_pump_duration),
+            ms(snapshot.last_danmaku_plan_duration),
+            ms(snapshot.last_render_duration),
+            ms(snapshot.last_tick_duration),
+        );
+    }
+}
+
+/// `NSH_ERIKA_TRACE=1` 时的 GTK tick 统计：每秒一行，专门回答"GTK 到底掉没掉帧"。
+///
+/// ```text
+/// [nsh-erika] gtk tick ≈60/s paint ≈60/s frames ≈60/s audio≈48.0k/s queued=118ms maxgap=18ms
+/// [nsh-erika] gtk tick ≈1/s  paint ≈1/s  frames ≈1/s  audio≈0/s queued=?       maxgap=1000ms
+/// ```
+///
+/// - `tick`：帧时钟回调次数/s —— 出帧频率的**唯一来源**；
+/// - `paint`：真正换上新纹理的次数/s（每 tick 至多一次）；
+/// - `audio`：写进音频设备的 PCM 帧数增量/s（`audio_written_frames`；44.1k/48k 正常，
+///   `≈0/s` = 没声音）；
+/// - `queued`：音频设备环里还排着多少毫秒（`audio_queued`；正常一百多毫秒，`?` = 设备
+///   还没起来、`0ms` 或一直不涨 = 没人往环里写）；
+/// - `frames`：引擎**发布到帧槽的帧数**增量/s（`FrameSlot::generation` 的增量，引擎发布到帧槽的
+///   次数都算）。`frames > paint` = 引擎出了、控件没换上；`frames < tick` = 引擎跟不上。
+///   三个数一起看就能定位断点：
+///   - `frames < tick` → 引擎出帧没跟上（去看 `erika.video: 耗时 …`）；
+///   - `frames ≈ tick > paint` → 引擎在出帧，但控件这边没换上（贴图/取帧间隙）；
+///   - `tick` 自己掉了 → GTK/合成器限频，和上面两者无关。
+/// - `maxgap`：这一秒里相邻两次 tick 的最大间隔，掉帧时明显大于 1/60s。
+///
+/// ⚠️ tick 彻底停了（最小化）时**每秒不会有任何输出** —— "这一行消失"本身就是结论。
+/// ⚠️ 不要拿 `GdkFrameClock::fps()` 当基准：实测窗口被挡住、tick 掉到 1/s 时它照样报
+/// 57.8 —— 那是 GTK 按 refresh interval 估的**显示器**刷新率，不是实际出帧率。
+pub(crate) struct GtkTickProbe {
+    started: Instant,
+    ticks: u32,
+    paints: u32,
+    last: Option<Instant>,
+    max_gap: Duration,
+    /// 上次打印时的帧槽 `generation`，用来算每秒发布帧数。
+    last_generation: u64,
+    /// 上次打印时的 `audio_written_frames`，用来算每秒写入的 PCM 帧数。
+    last_audio: u64,
+    /// 这一秒内帧槽 `generation` 前进了多少（= 引擎发布了几帧）。
+    published: u64,
+    /// 第一次打印还没有基线（否则会把"从开播到现在的总帧数"当成每秒帧数）。
+    primed: bool,
+}
+
+impl GtkTickProbe {
+    pub(crate) fn from_env() -> Option<Self> {
+        let on = std::env::var_os("NSH_ERIKA_TRACE")
+            .is_some_and(|value| !value.is_empty() && value != "0");
+        on.then(|| Self {
+            started: Instant::now(),
+            ticks: 0,
+            paints: 0,
+            last: None,
+            max_gap: Duration::ZERO,
+            last_generation: 0,
+            last_audio: 0,
+            published: 0,
+            primed: false,
+        })
+    }
+
+    /// 记一次 tick；返回 `true` 表示该打印了（由调用方补上状态再调 [`Self::print`]）。
+    pub(crate) fn tick(&mut self, now: Instant, generation: u64, painted: bool) -> bool {
+        self.ticks += 1;
+        if !self.primed {
+            self.last_generation = generation;
+        } else {
+            // 累加这一秒内的每一段增量（一次 tick 拿到的可能就是全部）。
+            self.published += generation.saturating_sub(self.last_generation);
+            self.last_generation = generation;
+        }
+        self.paints += u32::from(painted);
+        if let Some(last) = self.last {
+            self.max_gap = self.max_gap.max(now.saturating_duration_since(last));
+        }
+        self.last = Some(now);
+        now.saturating_duration_since(self.started) >= Duration::from_secs(1)
+    }
+
+    /// 打印这一秒的统计并清零。
+    pub(crate) fn print(&mut self, now: Instant, status: &crate::ErikaStatus) {
+        let elapsed = now.saturating_duration_since(self.started);
+        let per_second = |count: u64| count as f64 / elapsed.as_secs_f64();
+        // 第一行只用来建基线（否则会把"开播以来的总数"当成每秒值）。
+        let published = if self.primed { self.published } else { 0 };
+        let audio = if self.primed {
+            status
+                .presenter
+                .audio_written_frames
+                .saturating_sub(self.last_audio)
+        } else {
+            0
+        };
+        let audio_rate = per_second(audio);
+        let audio_text = if audio_rate >= 1000.0 {
+            format!("{:.1}k/s", audio_rate / 1000.0)
+        } else {
+            format!("{:.0}/s", audio_rate)
+        };
+        let queued = status.presenter.audio_queued.map_or_else(
+            || "?".to_string(),
+            |value| format!("{:.0}ms", value.as_secs_f64() * 1000.0),
+        );
+        eprintln!(
+            "[nsh-erika] gtk tick ≈{:.0}/s paint ≈{:.0}/s frames ≈{:.0}/s audio≈{audio_text} queued={queued} maxgap={:.0}ms",
+            per_second(self.ticks.into()),
+            per_second(self.paints.into()),
+            per_second(published),
+            self.max_gap.as_secs_f64() * 1000.0,
+        );
+        self.started = now;
+        self.ticks = 0;
+        self.paints = 0;
+        self.max_gap = Duration::ZERO;
+        self.published = 0;
+        self.last_audio = status.presenter.audio_written_frames;
+        self.primed = true;
     }
 }

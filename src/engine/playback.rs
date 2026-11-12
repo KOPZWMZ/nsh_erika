@@ -31,7 +31,6 @@ impl ErikaEngine {
         let had_media = self.presenter.player().has_open_media();
 
         // 换片:会话代次 +1(做差值的消费者靠它重置基线)
-        self.session = self.session.saturating_add(1);
         // 先让 UI 看到"打开中"，再去做阻塞的活
         self.frames.clear();
         self.error = None;

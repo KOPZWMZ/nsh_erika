@@ -65,7 +65,10 @@ impl ErikaEngine {
         self.last_keepalive = Instant::now();
 
         let result = self.presenter.export_frame_dmabuf(width, height, scale);
-        self.probe_timings();
+        // 诊断：各阶段耗时，实现在 `trace.rs`（`NSH_ERIKA_TRACE=1` 才动）。
+        if let Some(probe) = self.timings_probe.as_mut() {
+            probe.tick(&self.presenter);
+        }
         match result {
             Ok(Some(frame)) => self.frames.publish(Arc::new(frame)),
             Ok(None) => {} // 暂停/无新帧：保留上一张
@@ -101,25 +104,4 @@ impl ErikaEngine {
         }
     }
 
-    /// `NSH_ERIKA_TRACE=1` 时每 60 次出帧打一行 erika 自己记的各阶段耗时（毫秒）。
-    ///
-    /// 引擎线程吃满 CPU 时，这一行直接指出是字幕光栅、视频上传、弹幕排版还是合成。
-    fn probe_timings(&mut self) {
-        self.probe_ticks += 1;
-        if self.probe_ticks % 60 != 0 || std::env::var_os("NSH_ERIKA_TRACE").is_none() {
-            return;
-        }
-        let snapshot = self.presenter.runtime_snapshot();
-        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
-        log::info!(
-            "erika.video: 耗时 pump={:.2} sub={:.2} video={:.2} audio={:.2} danmaku={:.2} render={:.2} total={:.2} (ms)",
-            ms(snapshot.last_pump_duration),
-            ms(snapshot.last_subtitle_pump_duration),
-            ms(snapshot.last_video_pump_duration),
-            ms(snapshot.last_audio_pump_duration),
-            ms(snapshot.last_danmaku_plan_duration),
-            ms(snapshot.last_render_duration),
-            ms(snapshot.last_tick_duration),
-        );
-    }
 }

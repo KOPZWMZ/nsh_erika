@@ -113,8 +113,6 @@ pub(crate) struct ErikaEngine {
     /// 必需：`ActorContext` 没有"读当前 state"的接口，而 `current_status()` 每次都要
     /// 现组一份（字面量克隆 + 一吨字段），所以判等只能自己留一份。
     published: Option<ErikaStatus>,
-    /// 会话代次:每次 `open`(换片)+1。`stop` 不 +1(统计不归零)。
-    session: u64,
     /// 上一轮是否真的出了帧(只给 `NSH_ERIKA_TRACE` 探针看,不参与逻辑)
     last_rendered: bool,
     /// 上一次泵音频的时刻(出帧也算泵),节流 `KEEPALIVE_EVERY`
@@ -125,8 +123,8 @@ pub(crate) struct ErikaEngine {
     export_error_reported: bool,
     /// 保活泵失败只报一次（同上）。
     keepalive_error_reported: bool,
-    /// `NSH_ERIKA_TRACE=1` 时每 60 次出帧打一行各阶段耗时。
-    probe_ticks: u64,
+    /// 诊断（`NSH_ERIKA_TRACE=1`）：每 60 次出帧一行各阶段耗时，实现在 `trace.rs`。
+    timings_probe: Option<crate::trace::TimingsProbe>,
 
     /// 兜底采样的节流(1s)
     last_publish: Instant,
@@ -142,10 +140,9 @@ impl ErikaEngine {
             error: None,
             player_events,
             published: None,
-            session: 1,
             export_error_reported: false,
             keepalive_error_reported: false,
-            probe_ticks: 0,
+            timings_probe: crate::trace::TimingsProbe::from_env(),
             last_rendered: false,
             last_keepalive: Instant::now(),
             tick_probe: crate::trace::RateProbe::from_env("engine tick"),
@@ -195,7 +192,6 @@ impl ErikaEngine {
         let s = self.presenter.runtime_snapshot(); // 引擎线程,1s 一次(或每次变化),700B 构造无所谓
         ErikaStatus {
             presenter: PresenterObservation {
-                stats: s.stats,
                 audio_written_frames: s.audio_output_written_frames,
                 audio_queued: s.audio_output_queued_duration,
                 video_size: self
@@ -205,22 +201,14 @@ impl ErikaEngine {
                     .into_iter()
                     .find(|track| track.kind == erika::TrackKind::Video && track.width > 0)
                     .map(|track| (track.width, track.height)),
-                canvas: {
-                    // 给控件算比例的是**画布**尺寸,不是导出尺寸(两者在有 letterbox 时不同)。
-                    let request = *self.request.frame();
-                    (request.canvas.0, request.canvas.1, request.scale as f32)
-                },
             },
             // 字幕:样式整包 + 延迟(上游就这两块;font_scale / supersampling 没 getter,读不到)
             subtitle: SubtitleSnapshot::from_parts(
                 self.presenter.subtitle_style(),
                 self.presenter.subtitle_delay_micros(),
             ),
-            session: self.session,
             volume: self.presenter.volume() as f32,
             muted: self.presenter.muted(),
-            // 和 `Player::is_playing()` 同源,只是顺手发布出来,省得控件再去问一遍。
-            playing: self.presenter.player().playback_snapshot().is_playing(),
             danmaku: {
                 let config = self.presenter.danmaku_config().cloned().unwrap_or_default();
                 // 样式分组:读侧与写侧共用同一批类型(`player/danmaku.rs` 的分组表)。
@@ -310,6 +298,7 @@ impl ThreadActor for ErikaEngine {
             if pump {
                 self.pump_frame();
             }
+            // 诊断（`NSH_ERIKA_TRACE=1`，实现在 `trace.rs`）
             if let Some(probe) = self.tick_probe.as_mut() {
                 // "这一轮到底出帧了没有 / 有没有媒体" —— 卡顿时先看这两个。
                 let (render, media) =

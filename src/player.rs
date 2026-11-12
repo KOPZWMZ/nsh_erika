@@ -80,7 +80,7 @@ use crate::source::{ErikaVideoSource, FrameSlot, Request};
 
 use actor_lite::ActorHandle;
 
-use erika::presenter::{PresenterRuntime, PresenterStats};
+use erika::presenter::PresenterRuntime;
 use erika::{ChapterInfo, MediaRequest, PlaybackSnapshot, PlayerState, TrackInfo, TrackSelection};
 
 use std::sync::Arc;
@@ -140,8 +140,6 @@ const CALL_WITH_TIMEOUT: Duration = Duration::from_millis(200);
 /// 每次变化时走一次 `watch` + `PartialEq`,又胖又吵。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PresenterObservation {
-    /// 解码/渲染计数。fps 探针用 `stats.rendered_video_frames`。
-    pub stats: PresenterStats,
     /// 推给音频设备的帧数 —— "声音确实在走"的硬证据(headless 也能看,不依赖设备)。
     pub audio_written_frames: u64,
     /// 设备环里还排着的音频(真机稳态接近 0;headless 会顶在 cap 上)。
@@ -151,11 +149,6 @@ pub struct PresenterObservation {
     /// 控件用它算"视频比例在画布里的内接矩形"（`component.rs::export_size`），
     /// 出帧只覆盖那块矩形，UI 那边由 `ContentFit::Contain` 摆回画布中间。
     pub video_size: Option<(u32, u32)>,
-    /// 渲染层最近一次请求的画布尺寸 `(物理宽, 物理高, DPI 缩放)`。
-    ///
-    /// 控件自己知道物理尺寸（`gtk::Picture` 宽高 × `scale_factor`），但**逻辑**尺寸和
-    /// DPI 要一起看才知道：命中测试 / 把点击换算成"第几 %"时用得上。
-    pub canvas: (u32, u32, f32),
 }
 
 /// 句柄对外暴露的**状态补充**:presenter 侧观测 + 音量 + 错误。
@@ -164,19 +157,12 @@ pub struct PresenterObservation {
 /// ([`ErikaPlayer::state`] / [`ErikaPlayer::playback`] / [`ErikaPlayer::tracks`])。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ErikaStatus {
-    /// 会话代次:**每次 `open`(换片)+1**,`stop` 不 +1。
-    ///
-    /// 做"增量/差值"的消费者(比如每秒算 fps 的探针)靠它判断基线要不要重置。
-    pub session: u64,
     /// presenter 侧观测(Player 读不到的)。
     pub presenter: PresenterObservation,
     /// 当前音量(设备侧,`Player` 没有)。
     pub volume: f32,
     /// 是否静音。静音**不改** [`volume`](Self::volume):上游 `set_muted` 只把输出压到 0。
     pub muted: bool,
-    /// 是否正在播。和 `Player::is_playing()` 同源,只是顺手发布出来,省得每次变化都
-    /// 绕去读 `Player`。控件不读它(靠 tick 回调持续要帧),留给 UI 的播放/暂停图标用。
-    pub playing: bool,
     /// 弹幕状态(开关 / 轨道 / 样式)。
     pub danmaku: danmaku::DanmakuSnapshot,
     /// 字幕状态(外观 / 版面 / 延迟)。
