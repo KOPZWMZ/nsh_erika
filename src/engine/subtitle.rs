@@ -18,7 +18,9 @@ impl ErikaEngine {
     /// 没有 `ctx`:这一族不参与出帧判定,错误由 `run` 后面的发布流程带出去。
     pub(super) fn on_subtitle(&mut self, cmd: SubtitleCmd) {
         match cmd {
-            SubtitleCmd::TextStyle(style) => self.write_subtitle_style(|current| style.apply(current)),
+            SubtitleCmd::TextStyle(style) => {
+                self.write_subtitle_style(|current| style.apply(current))
+            }
             SubtitleCmd::Placement(placement) => {
                 self.write_subtitle_style(|current| placement.apply(current))
             }

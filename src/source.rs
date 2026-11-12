@@ -240,6 +240,17 @@ impl ErikaVideoSource {
         }
     }
 
+    /// 控件侧导入 dma-buf 失败时调：告诉引擎本机出不了帧（引擎据此停止导出、写进状态）。
+    ///
+    /// 只在**第一次**调用有意义（引擎那边一次性置上），但重复调用无害。
+    pub(crate) fn report_video_unavailable(&self, reason: String) {
+        let _ = self
+            .slot
+            .engine
+            .handle
+            .send_cmd(ErikaCmd::VideoUnavailable(reason));
+    }
+
     /// 现在有没有画面可画（**零成本、非阻塞**）。
     pub fn has_frame(&self) -> bool {
         self.slot.frames.has_frame()

@@ -92,13 +92,41 @@ impl SubtitleOverrides {
     /// 转成上游的位掩码。
     fn to_bits(self) -> u32 {
         let mut bits = 0;
-        bits |= if self.font_size { SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS } else { 0 };
-        bits |= if self.font_name { SUBTITLE_OVERRIDE_FONT_NAME } else { 0 };
-        bits |= if self.colors { SUBTITLE_OVERRIDE_COLORS } else { 0 };
-        bits |= if self.attributes { SUBTITLE_OVERRIDE_ATTRIBUTES } else { 0 };
-        bits |= if self.border { SUBTITLE_OVERRIDE_BORDER } else { 0 };
-        bits |= if self.alignment { SUBTITLE_OVERRIDE_ALIGNMENT } else { 0 };
-        bits |= if self.margins { SUBTITLE_OVERRIDE_MARGINS } else { 0 };
+        bits |= if self.font_size {
+            SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS
+        } else {
+            0
+        };
+        bits |= if self.font_name {
+            SUBTITLE_OVERRIDE_FONT_NAME
+        } else {
+            0
+        };
+        bits |= if self.colors {
+            SUBTITLE_OVERRIDE_COLORS
+        } else {
+            0
+        };
+        bits |= if self.attributes {
+            SUBTITLE_OVERRIDE_ATTRIBUTES
+        } else {
+            0
+        };
+        bits |= if self.border {
+            SUBTITLE_OVERRIDE_BORDER
+        } else {
+            0
+        };
+        bits |= if self.alignment {
+            SUBTITLE_OVERRIDE_ALIGNMENT
+        } else {
+            0
+        };
+        bits |= if self.margins {
+            SUBTITLE_OVERRIDE_MARGINS
+        } else {
+            0
+        };
         bits |= if self.blur { SUBTITLE_OVERRIDE_BLUR } else { 0 };
         bits & SUBTITLE_OVERRIDE_ALL
     }
@@ -253,7 +281,10 @@ mod tests {
     #[test]
     fn our_defaults_match_upstream() {
         let upstream = SubtitleStyleConfig::default();
-        assert_eq!(SubtitleTextStyle::from(&upstream), SubtitleTextStyle::default());
+        assert_eq!(
+            SubtitleTextStyle::from(&upstream),
+            SubtitleTextStyle::default()
+        );
     }
 
     #[test]

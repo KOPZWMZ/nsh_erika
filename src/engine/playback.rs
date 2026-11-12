@@ -33,6 +33,9 @@ impl ErikaEngine {
         // 换片:会话代次 +1(做差值的消费者靠它重置基线)
         // 先让 UI 看到"打开中"，再去做阻塞的活
         self.frames.clear();
+        // 清控制面错误（换片了，上一次 open / seek 的失败已经没有意义）。
+        // **不动 `video_unavailable`**：那是机器能力（驱动缺扩展 / GSK 接不了 dma-buf），
+        // 换片不会让它变好；清了只会让它再失败一次。
         self.error = None;
         ctx.update_state(self.current_status());
 

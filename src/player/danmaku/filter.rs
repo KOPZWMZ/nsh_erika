@@ -112,7 +112,11 @@ impl DanmakuFilter {
         cfg.block_top = self.blocked_modes.top;
         cfg.block_bottom = self.blocked_modes.bottom;
         cfg.block_scroll = self.blocked_modes.scroll;
-        cfg.block_words = self.block_words.iter().map(FilterRule::to_upstream).collect();
+        cfg.block_words = self
+            .block_words
+            .iter()
+            .map(FilterRule::to_upstream)
+            .collect();
     }
 }
 
@@ -195,7 +199,10 @@ mod tests {
         }
         .apply(&mut cfg);
 
-        assert_eq!(cfg.block_words, vec!["剧透".to_string(), "过滤/^广告/".to_string()]);
+        assert_eq!(
+            cfg.block_words,
+            vec!["剧透".to_string(), "过滤/^广告/".to_string()]
+        );
     }
 
     /// 读侧要能把上游语法解析回来(并且和 `apply` 是同一个规则)。

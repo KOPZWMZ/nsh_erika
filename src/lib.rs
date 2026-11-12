@@ -118,12 +118,12 @@ pub use player::{
 };
 pub use source::{ErikaVideoSource, FrameRequest};
 // 句柄的 `call` / `status` 直接暴露 erika 自己的类型:不另造一层。
-pub use erika::presenter::{PresenterRuntime, PresenterStats};
+pub use erika::MediaRequest;
 /// 只导出**出现在我们公开签名 / 公开字段里**的上游类型 —— 消费者不依赖 erika。
 pub use erika::danmaku::{DanmakuLayoutConfig, DanmakuShadowStyle, DanmakuTrackInfo};
-pub use erika::{ChapterInfo, TrackInfo, TrackKind, TrackSelection};
+pub use erika::presenter::{PresenterRuntime, PresenterStats};
 pub use erika::subtitle::SubtitleTrackConfig;
-pub use erika::MediaRequest;
+pub use erika::{ChapterInfo, TrackInfo, TrackKind, TrackSelection};
 
 /// 原生控件名。
 ///

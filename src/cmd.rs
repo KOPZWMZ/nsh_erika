@@ -27,7 +27,7 @@
 //! | [`PlaybackCmd`] | 在不在播 / 播哪一段 | presenter(音频 cork/flush、清视觉、bump 代号) |
 //! | [`SettingsCmd`] | 在播**但换个参数** | presenter(音量在 `audio_output` 上;变速要 time-stretch) |
 //! | [`DanmakuCmd`] | 弹幕轨与样式 | presenter(弹幕整块只在 presenter 上) |
-//! | [`RenderCmd`] | 出不出帧 / 走哪条出帧路 | 引擎自己(`presenter` + 帧槽) |
+//! | [`RenderCmd`] | 出不出帧 | 引擎自己(`presenter` + 帧槽) |
 //! | [`ErikaCmd::Call`] | 以上都不是 | 见下面的警告 |
 
 use std::time::Duration;
@@ -62,6 +62,11 @@ pub(crate) enum ErikaCmd {
     Subtitle(SubtitleCmd),
     /// 渲染握手:动的是引擎自己的出帧路径和帧槽,和媒体无关。
     Render(RenderCmd),
+    /// 控件侧（`frames.rs`）导入 dma-buf 失败：本机从此不出帧。
+    ///
+    /// 从适配层发回来的信号 —— 引擎不知道也不区分"导出坏了"还是"导入坏了"：
+    /// 对产品来说都是"这台机器没有可用的出帧路径"，应用的动作也一样（降级到内置 `<video>`）。
+    VideoUnavailable(String),
     /// presenter 独有、还没封的能力(超分、HDR headroom、HUD、截图、轨道章节…)。
     ///
     /// **故意留在顶层**:它能跑任意代码,塞进任何家族都会破坏"该家族语义闭合"。

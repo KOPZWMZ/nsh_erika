@@ -93,7 +93,9 @@ pub use danmaku::{
     BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuSnapshot,
     DanmakuText, ErikaDanmaku, FilterRule,
 };
-pub use subtitle::{ErikaSubtitle, SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle};
+pub use subtitle::{
+    ErikaSubtitle, SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
+};
 pub use tracks::ErikaTracks;
 /// 等引擎线程退出的轮询间隔 / 上限。
 ///

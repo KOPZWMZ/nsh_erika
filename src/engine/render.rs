@@ -41,28 +41,22 @@ impl ErikaEngine {
     ///
     /// `want_frame` 是"这一轮之前有人要过帧"的旗标(`swap(false)` = 读并复位),所以一次
     /// 请求只会兑现一次出帧。`IDLE` 超时也会走到这里,那时旗标是 `false`,只走保活泵。
-    pub(super) fn pump_frame(&mut self) {
+    ///
+    /// 返回 `Some(文案)` = 这一帧发现**本机出不了帧**，由 `run` 写进状态让应用看到。
+    pub(super) fn pump_frame(&mut self) -> Option<String> {
+        self.last_rendered = false;
         // 取一次请求快照：swap(false) = 读并复位，否则引擎会一直以为"被需要"
-        let want = self.request.want_frame.swap(false, Ordering::AcqRel);
+        if !self.request.want_frame.swap(false, Ordering::AcqRel) {
+            return None;
+        }
+        // 已知本机出不了帧：别再调导出（它只会再失败一次）。音频由 `keepalive_pump` 管。
+        if self.video_unavailable.is_some() {
+            return None;
+        }
         let (width, height, scale) = {
             let request = *self.request.frame();
             (request.export.0, request.export.1, request.scale)
         };
-
-        let has_media = self.presenter.player().has_open_media();
-
-        // 尺寸不合法(父容器还没给确定尺寸 → 画布 0 面积)不算"有人要画面":导出本来就做不了。
-        let want = want && width > 0 && height > 0;
-        self.last_rendered = want && has_media;
-
-        if !self.last_rendered {
-            // 没人要帧:只泵音频 / 时钟 / 解码,不发帧。窗口被限频时靠它不断音。
-            self.keepalive_pump(has_media);
-            return;
-        }
-
-        // 出帧本身就泵过音频了,重置保活计时,免得紧接着再白泵一次。
-        self.last_keepalive = Instant::now();
 
         let result = self.presenter.export_frame_dmabuf(width, height, scale);
         // 诊断：各阶段耗时，实现在 `trace.rs`（`NSH_ERIKA_TRACE=1` 才动）。
@@ -70,38 +64,42 @@ impl ErikaEngine {
             probe.tick(&self.presenter);
         }
         match result {
-            Ok(Some(frame)) => self.frames.publish(Arc::new(frame)),
-            Ok(None) => {} // 暂停/无新帧：保留上一张
-            Err(e) => {
-                // 没有兜底路径：驱动不支持 / 这张图导不出来就只出一次 WARN，
-                // 上一张继续显示（产品策略是整条降级到 NSH 内置 <video>，见 dev_doc §8）。
-                if !self.export_error_reported {
-                    self.export_error_reported = true;
-                    log::warn!("nsh-erika: dma-buf 导出失败（不再降级到 CPU 回读）: {e}");
-                }
+            Ok(Some(frame)) => {
+                self.frames.publish(Arc::new(frame));
+                self.last_rendered = true;
+                None
             }
+            Ok(None) => None, // 暂停/无新帧：保留上一张
+            // 没有兜底路径（见 dev_doc §8）：记下来，之后不再尝试导出，
+            // 由应用决定整条降级到 NSH 内置 <video>。
+            Err(e) => self.latch_video_unavailable(format!("dma-buf 导出失败: {e}")),
         }
     }
 
     /// 保活泵：**只**喂音频 / 推进时钟 / 推进解码,不取帧、不建纹理。
     ///
     /// 只在播放中做 —— 暂停时 `render_tick` 泵不出任何音频,白花合成的时间。
-    fn keepalive_pump(&mut self, has_media: bool) {
-        // 先看节流(纯计算),再问 presenter —— `is_playing()` 要拿一次锁。
-        if self.last_keepalive.elapsed() < KEEPALIVE_EVERY || !has_media {
+    pub(super) fn keepalive_pump(&mut self) {
+        if self.last_keepalive.elapsed() < KEEPALIVE_EVERY {
             return;
-        }
+        } // 纯算术
+        if !self.presenter.player().has_open_media() {
+            return;
+        } // 到期才加锁
         if !self.presenter.is_playing() {
             return;
         }
         self.last_keepalive = Instant::now();
         let time = self.presenter.media_time().as_secs_f64();
-        if let Err(e) = self.presenter.render_tick(time) {
-            if !self.keepalive_error_reported {
-                self.keepalive_error_reported = true;
-                log::warn!("nsh-erika: keepalive pump: {e}");
+        match self.presenter.render_tick(time) {
+            // 边沿标记：失败记一次，成功后复位，下次再坏才会再报。
+            Ok(_) => self.keepalive_failed = false,
+            Err(e) => {
+                if !self.keepalive_failed {
+                    self.keepalive_failed = true;
+                    log::warn!("nsh-erika: keepalive pump: {e}");
+                }
             }
         }
     }
-
 }

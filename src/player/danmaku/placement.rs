@@ -145,8 +145,7 @@ mod tests {
 
         assert_eq!(cfg.scroll_speed_factor, 2.0);
         assert_eq!(
-            cfg.scroll_duration_seconds,
-            before.scroll_duration_seconds,
+            cfg.scroll_duration_seconds, before.scroll_duration_seconds,
             "滚动时长不归这一组管"
         );
     }

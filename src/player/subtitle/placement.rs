@@ -66,13 +66,16 @@ impl From<&SubtitleStyleConfig> for SubtitlePlacement {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::style::SubtitleTextStyle;
+    use super::*;
 
     #[test]
     fn our_defaults_match_upstream() {
         let upstream = SubtitleStyleConfig::default();
-        assert_eq!(SubtitlePlacement::from(&upstream), SubtitlePlacement::default());
+        assert_eq!(
+            SubtitlePlacement::from(&upstream),
+            SubtitlePlacement::default()
+        );
     }
 
     #[test]

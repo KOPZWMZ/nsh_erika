@@ -102,7 +102,10 @@ impl ErikaTracks {
     /// 列表是 worker 同步过来的，挂完那一刻可能还没刷新（有短暂空窗）。
     ///
     /// （presenter 对这个也是**纯转发**，没有音频协调动作，所以走 `raw()` 不算绕过协调。）
-    pub fn add_external_subtitle(&self, uri: impl Into<String>) -> erika::Result<SubtitleTrackConfig> {
+    pub fn add_external_subtitle(
+        &self,
+        uri: impl Into<String>,
+    ) -> erika::Result<SubtitleTrackConfig> {
         self.player.raw().add_external_subtitle(uri)
     }
 

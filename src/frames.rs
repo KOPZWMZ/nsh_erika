@@ -54,7 +54,7 @@ impl FrameBinder {
         // 上一次贴上去的帧代号：没变就说明没有新帧，别重复建纹理。
         let painted = Rc::new(Cell::new(u64::MAX));
         let first = Rc::new(Cell::new(false));
-        let trace = std::env::var_os("NSH_ERIKA_TRACE").is_some();
+        let trace = crate::trace::enabled();
         // 诊断：`NSH_ERIKA_TRACE=1` 时每秒一行 GTK tick 统计（实现在 `trace.rs`）。
         // `add_tick_callback` 收的是 `Fn`，所以要内部可变性。
         let tick_probe = Rc::new(RefCell::new(crate::trace::GtkTickProbe::from_env()));
@@ -63,13 +63,18 @@ impl FrameBinder {
             let (w, h) = value.split_once('x')?;
             Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
         });
-        // 导入失败只报一次（否则每帧一条）。
-        let import_warned = Rc::new(Cell::new(false));
+        // 导入失败之后**不再尝试**（没有兜底路径，重试只会每帧白建一次纹理）：
+        // 置上就等于"这条路死了"，同时也就等于"只报一次"。
+        let import_failed = Rc::new(Cell::new(false));
 
         self.picture.add_tick_callback(move |picture, _clock| {
             // 解绑了，或者播放句柄全被 drop 了：收工（回调在这里返回 `Break` 后，
             // GTK 会把它连同捕获的帧源一起释放）。
             if !ticking.get() || !source.is_alive() {
+                return gtk::glib::ControlFlow::Break;
+            }
+            // 导入已经证明不可用：收工（引擎那边也已经知道，见 `report_video_unavailable`）。
+            if import_failed.get() {
                 return gtk::glib::ControlFlow::Break;
             }
             let scale = picture.scale_factor() as f64;
@@ -119,11 +124,16 @@ impl FrameBinder {
                             }
                             picture.set_paintable(Some(&texture));
                         }
-                        // 导入失败（GSK 后端接不了 dma-buf）：只能不画，没有兜底路径。
+                        // 导入失败（GSK 后端接不了 dma-buf）：没有兜底路径。
+                        // 记下来（下一帧直接 Break）并告诉引擎，由应用决定降级到内置 <video>。
                         None => {
-                            if !import_warned.get() {
-                                import_warned.set(true);
-                                log::warn!("erika.video: dma-buf 导入失败，这个宿主没有可用的出帧路径");
+                            if !import_failed.replace(true) {
+                                log::warn!(
+                                    "erika.video: dma-buf 导入失败，这个宿主没有可用的出帧路径"
+                                );
+                                source.report_video_unavailable(
+                                    "GdkDmabufTexture 导入失败（GSK 后端接不了 dma-buf）".to_owned(),
+                                );
                             }
                         }
                     }

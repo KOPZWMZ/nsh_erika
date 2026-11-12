@@ -119,10 +119,16 @@ pub(crate) struct ErikaEngine {
     last_keepalive: Instant,
     /// `NSH_ERIKA_TRACE=1` 时每秒打一行"引擎醒了多少次"(诊断用)
     tick_probe: Option<crate::trace::RateProbe>,
-    /// dma-buf 导出失败只报一次（否则每帧一条）。
-    export_error_reported: bool,
-    /// 保活泵失败只报一次（同上）。
-    keepalive_error_reported: bool,
+    /// 本机**没有可用的出帧路径**（导出失败或控件侧导入失败）。
+    ///
+    /// 一次置上、不再清除（换片也不清：这是机器能力，不是媒体状态，见 `playback.rs::open`）。
+    /// 它同时**就是门卫**：置上之后 `pump_frame` 不再调导出，所以不会重复失败、
+    /// 也就不需要额外的"已报告"标记。
+    video_unavailable: Option<String>,
+    /// 保活泵失败过。`render_tick` 会继续重试（可能只是一次瞬时错误），
+    /// 所以这是**边沿**标记：失败记一次、成功就复位，日志不刷屏。
+    keepalive_failed: bool,
+
     /// 诊断（`NSH_ERIKA_TRACE=1`）：每 60 次出帧一行各阶段耗时，实现在 `trace.rs`。
     timings_probe: Option<crate::trace::TimingsProbe>,
 
@@ -140,8 +146,8 @@ impl ErikaEngine {
             error: None,
             player_events,
             published: None,
-            export_error_reported: false,
-            keepalive_error_reported: false,
+            video_unavailable: None,
+            keepalive_failed: false,
             timings_probe: crate::trace::TimingsProbe::from_env(),
             last_rendered: false,
             last_keepalive: Instant::now(),
@@ -166,6 +172,13 @@ impl ErikaEngine {
             ErikaCmd::Danmaku(c) => self.on_danmaku(c),
             ErikaCmd::Subtitle(c) => self.on_subtitle(c),
             ErikaCmd::Call(job) => job(&mut self.presenter), // 逃生舱:不代捕错误
+            // 控件侧导入失败：记下来（应用据此降级到内置 <video>），之后不再尝试出帧。
+            // 错误写进 `self.error` 后由下面统一的 `publish` 带出去。
+            ErikaCmd::VideoUnavailable(reason) => {
+                if let Some(reason) = self.latch_video_unavailable(reason) {
+                    self.error = Some(reason);
+                }
+            }
         }
         self.publish(ctx);
         self.last_publish = Instant::now();
@@ -181,6 +194,17 @@ impl ErikaEngine {
         if let Err(e) = f(&mut self.presenter) {
             self.set_error(ctx, format!("{what}: {e}"));
         }
+    }
+
+    /// 记下"本机出不了帧"。**第一次**返回要报出去的文案，之后返回 `None`（不重复报）。
+    fn latch_video_unavailable(&mut self, reason: String) -> Option<String> {
+        if self.video_unavailable.is_some() {
+            return None;
+        }
+        let message = format!("出帧路径不可用，本机不再尝试: {reason}");
+        log::warn!("nsh-erika: {message}");
+        self.video_unavailable = Some(reason);
+        Some(message)
     }
 
     fn set_error(&mut self, ctx: &ActorContext<Self>, message: String) {
@@ -295,9 +319,11 @@ impl ThreadActor for ErikaEngine {
                 _ => break,                    // CmdWait 是 non_exhaustive，留个兜底
             };
 
-            if pump {
-                self.pump_frame();
+            if pump && let Some(reason) = self.pump_frame() {
+                self.set_error(&ctx, reason);
             }
+            // 保活：不管这一轮是被谁唤醒的，按自己的节流跑
+            self.keepalive_pump();
             // 诊断（`NSH_ERIKA_TRACE=1`，实现在 `trace.rs`）
             if let Some(probe) = self.tick_probe.as_mut() {
                 // "这一轮到底出帧了没有 / 有没有媒体" —— 卡顿时先看这两个。

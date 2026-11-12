@@ -18,7 +18,6 @@
 //! 只有这一个 prop，而且它是"身份"不是"控制"：播放、暂停、选轨、弹幕、字幕全在
 //! [`ErikaPlayer`](crate::ErikaPlayer) 上，控件一概不碰。
 
-use std::cell::Cell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -38,7 +37,7 @@ pub struct ErikaView {
     picture: gtk::Picture,
     frames: FrameBinder,
     /// "source 无效"只报一次。
-    warned: Rc<Cell<bool>>,
+    warned: bool,
 }
 
 impl ErikaView {
@@ -52,7 +51,7 @@ impl ErikaView {
         Self {
             frames: FrameBinder::new(&picture),
             picture,
-            warned: Rc::new(Cell::new(false)),
+            warned: false,
         }
     }
 }
@@ -71,13 +70,13 @@ impl NativeComponent for ErikaView {
                 let id = value.and_then(JsonValue::as_u64);
                 match id.and_then(ErikaVideoSource::resolve) {
                     Some(source) => {
-                        self.warned.set(false);
+                        self.warned = false;
                         self.frames.bind(source);
                     }
                     None => {
                         self.frames.unbind();
-                        if let Some(id) = id.filter(|_| !self.warned.get()) {
-                            self.warned.set(true);
+                        if let Some(id) = id.filter(|_| !self.warned) {
+                            self.warned = true;
                             log::warn!(
                                 "erika.video: source={id} 找不到帧源（句柄已经被 drop 了？）"
                             );
