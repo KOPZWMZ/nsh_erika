@@ -103,7 +103,7 @@ impl ErikaSubtitle {
 /// 字幕设置的快照。
 ///
 /// 字幕整块住在 presenter 上(`erika::Player` 只带轨道,不带样式),所以只能由引擎
-/// 采样后发布过来。低频:只在用户改样式/延迟时变。
+/// 读取后发布过来。低频:只在用户改样式/延迟时变。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SubtitleSnapshot {
     /// 外观组当前值(= 上游 `SubtitleStyleConfig` 里那 17 个字段)。

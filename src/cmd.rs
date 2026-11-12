@@ -70,6 +70,10 @@ pub(crate) enum ErikaCmd {
     /// presenter 独有、还没封的能力(超分、HDR headroom、HUD、截图、轨道章节…)。
     ///
     /// **故意留在顶层**:它能跑任意代码,塞进任何家族都会破坏"该家族语义闭合"。
+    ///
+    /// ⚠️ 它和别的命令一样会走到 `on_cmd` 末尾的 `publish`(发一次状态 + 一个事件)。
+    /// 以后如果有调用方用 `call_with` 在 tick 里高频轮询,这里就会变成每秒几十次无效唤醒 ——
+    /// 那时把它改成 `return false`(逃生舱不发布),或者把 `publish` 的判等加回来。
     Call(Job),
 }
 

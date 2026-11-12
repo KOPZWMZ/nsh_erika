@@ -6,9 +6,10 @@
 //! ## 控件不自建引擎
 //!
 //! 播放器和帧源都在**外面**创建（[`ErikaPlayer::new`](crate::ErikaPlayer::new)），控件
-//! 只负责显示：页面里用 `erika::ErikaVideo(&player)` 把帧源传进来，控制全在
+//! 只负责显示：页面里用 [`ErikaVideo`](crate::ErikaVideo)（或
+//! [`ErikaPlayer::video`](crate::ErikaPlayer::video)）把帧源传进来，控制全在
 //! [`ErikaPlayer`](crate::ErikaPlayer) 上。没拿到帧源就只显示空白。
-
+//!
 //! ## prop
 //!
 //! | prop | 类型 | 含义 |
