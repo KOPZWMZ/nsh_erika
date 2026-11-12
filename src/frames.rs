@@ -108,8 +108,8 @@ impl FrameBinder {
             }
             let mut swapped = false;
             if generation != painted.get() {
-                if let Some(frame) = frame {
-                    match texture_for(&frame) {
+                match frame {
+                    Some(frame) => match texture_for(&frame) {
                         Some(texture) => {
                             swapped = true;
                             if !first.get() {
@@ -136,16 +136,24 @@ impl FrameBinder {
                                 );
                             }
                         }
+                    },
+                    // 代号前进但槽里没有帧 = 引擎 `FrameSlot::clear()` 过（`open` 换片 / `stop`）：
+                    // 把画面撤掉。否则会停在上一帧，直到新片第一帧到达（可能几百 ms）。
+                    //
+                    // 暂停不会走到这里：那时引擎不 publish 也不 clear，代号压根不变。
+                    None => {
+                        picture.set_paintable(None::<&gtk::gdk::Texture>);
+                        // 换片了，下一张就是新片的"第一帧"（日志再打一次，方便按片排查）。
+                        first.set(false);
                     }
                 }
                 painted.set(generation);
             }
+            // 诊断（`NSH_ERIKA_TRACE=1`，实现在 `trace.rs`）
             if let Some(probe) = tick_probe.borrow_mut().as_mut() {
                 let now = Instant::now();
                 if probe.tick(now, generation, swapped) {
-                    // 每秒只读一次状态（`status()` 会克隆一份 ErikaStatus）：音频写入量、
-                    // 设备环排队时长从这里取。
-                    probe.print(now, &source.status());
+                    probe.print(now);
                 }
             }
             gtk::glib::ControlFlow::Continue

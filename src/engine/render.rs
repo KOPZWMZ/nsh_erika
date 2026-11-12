@@ -17,8 +17,9 @@
 //! 窗口可见性抖动时它和"要不要出帧"互相触发,就是连续爆音(见 dev_doc §7)。
 //!
 //! 出帧**只有一条路**:erika 导出线性 dma-buf,控件用 `GdkDmabufTexture` 导入 ——
-//! 我们这边一个 Vulkan 设备都不用建。没有 CPU 回读兜底(见 dev_doc §8),导出失败就
-//! 只报一次 WARN、不出新帧(上一张继续显示)。
+//! 我们这边一个 Vulkan 设备都不用建。没有 CPU 回读兜底(见 dev_doc §8):导出失败就把
+//! 文案写进状态(`ErikaStatus::error`,应用据此降级到内置 `<video>`)、之后**不再尝试导出**,
+//! 上一张继续显示;音频改由保活泵继续喂。
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -37,10 +38,11 @@ impl ErikaEngine {
         }
     }
 
-    /// 出帧面：控件要帧就导出,不要就只泵音频(保活)。
+    /// 出帧面：控件要帧就导出,不要就立刻返回。
     ///
     /// `want_frame` 是"这一轮之前有人要过帧"的旗标(`swap(false)` = 读并复位),所以一次
-    /// 请求只会兑现一次出帧。`IDLE` 超时也会走到这里,那时旗标是 `false`,只走保活泵。
+    /// 请求只会兑现一次出帧。`IDLE` 超时也会走到这里,那时旗标是 `false`,直接返回 ——
+    /// **保活泵不在这里**,它由 `run` 循环每轮独立调用(`keepalive_pump`)。
     ///
     /// 返回 `Some(文案)` = 这一帧发现**本机出不了帧**，由 `run` 写进状态让应用看到。
     pub(super) fn pump_frame(&mut self) -> Option<String> {
@@ -50,7 +52,7 @@ impl ErikaEngine {
             return None;
         }
         // 已知本机出不了帧：别再调导出（它只会再失败一次）。音频由 `keepalive_pump` 管。
-        if self.video_unavailable.is_some() {
+        if self.video_unavailable {
             return None;
         }
         let (width, height, scale) = {
@@ -67,6 +69,8 @@ impl ErikaEngine {
             Ok(Some(frame)) => {
                 self.frames.publish(Arc::new(frame));
                 self.last_rendered = true;
+                //重置音频泵的计时
+                self.last_keepalive = Instant::now();
                 None
             }
             Ok(None) => None, // 暂停/无新帧：保留上一张

@@ -134,42 +134,21 @@ fn shutdown_engine(handle: &ActorHandle<ErikaEngine>) {
 /// 拿不到就返回 `None`,由调用方决定要不要重试。
 const CALL_WITH_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// presenter 侧的观测量 —— **`Player` 上读不到的那部分**。
+/// presenter 侧状态：**`Player` 上读不到的那些**。
 ///
-/// 设备和渲染都在 presenter 手里,所以这些计数只能由引擎线程采样后发布过来
-/// (actor 的 `watch`,非阻塞读)。只放真的有人在用的字段:原来整包搬
-/// `PresenterRuntimeSnapshot`(40 个字段:弹幕 16、各阶段耗时 10、renderer 一堆),
-/// 每次变化时走一次 `watch` + `PartialEq`,又胖又吵。
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct PresenterObservation {
-    /// 推给音频设备的帧数 —— "声音确实在走"的硬证据(headless 也能看,不依赖设备)。
-    pub audio_written_frames: u64,
-    /// 设备环里还排着的音频(真机稳态接近 0;headless 会顶在 cap 上)。
-    pub audio_queued: Option<Duration>,
-    /// 视频轨的原始尺寸 `(宽, 高)`;没有视频轨 / 还没打开就是 `None`。
-    ///
-    /// 控件用它算"视频比例在画布里的内接矩形"（`component.rs::export_size`），
-    /// 出帧只覆盖那块矩形，UI 那边由 `ContentFit::Contain` 摆回画布中间。
-    pub video_size: Option<(u32, u32)>,
-}
-
-/// 句柄对外暴露的**状态补充**:presenter 侧观测 + 音量 + 错误。
-///
-/// 生命周期 / 位置 / 时长 / 轨道 **不在这里** —— 那些直连 `Player`
-/// ([`ErikaPlayer::state`] / [`ErikaPlayer::playback`] / [`ErikaPlayer::tracks`])。
+/// 生命周期 / 位置 / 时长 / 轨道不在这里 —— 那些直连 `Player`，零延迟。
+/// 视频尺寸也不在这里：控件每帧要用，走 `FrameSlot` 的原子。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ErikaStatus {
-    /// presenter 侧观测(Player 读不到的)。
-    pub presenter: PresenterObservation,
-    /// 当前音量(设备侧,`Player` 没有)。
+    /// 音量（在 presenter 的 `audio_output` 上，`Player` 没有）。
     pub volume: f32,
-    /// 是否静音。静音**不改** [`volume`](Self::volume):上游 `set_muted` 只把输出压到 0。
+    /// 静音。**不改** `volume`：上游 `set_muted` 只把输出压到 0。
     pub muted: bool,
-    /// 弹幕状态(开关 / 轨道 / 样式)。
-    pub danmaku: danmaku::DanmakuSnapshot,
-    /// 字幕状态(外观 / 版面 / 延迟)。
-    pub subtitle: subtitle::SubtitleSnapshot,
-    /// 最近一次错误(引擎写的:open 失败 / 协调命令失败 / 弹幕解析失败)。
+    /// 弹幕面板的初始化值（应用猜不到"实际生效的是什么"）。
+    pub danmaku: DanmakuSnapshot,
+    /// 字幕面板的初始化值（同上）。
+    pub subtitle: SubtitleSnapshot,
+    /// 最近一次失败（控制面 + 出帧路径）。
     pub error: Option<String>,
 }
 /// 播放器句柄:**只管控制与状态**,碰不到帧(帧走 [`crate::ErikaVideoSource`])。
@@ -538,11 +517,14 @@ impl ErikaPlayer {
     pub fn raw(&self) -> &erika::Player {
         &self.player
     }
-    /// 读 presenter 侧的状态(音量 / 观测量 / 错误)。
+    /// 读 presenter 侧的状态(音量 / 静音 / 弹幕 / 字幕 / 错误)。
     ///
-    /// 来源是 actor 的 `State`(引擎在**状态真的变化时**才发布:每条命令之后、
-    /// 收到 erika 的离散事件时、以及 1s 兜底采样),
-    /// 非阻塞 `watch` 读。生命周期 / 位置 / 时长 / 轨道**不从这里拿**。
+    /// 来源是 actor 的 `State`:引擎在**每条命令之后**和**收到 erika 离散事件时**各发布
+    /// 一次(不判等,所以可能拿到与上次相同的值),这里是非阻塞 `watch` 读 ——
+    /// **什么时候读都是最新的**,不需要先订阅事件。
+    ///
+    /// 生命周期 / 位置 / 时长 / 轨道**不从这里拿**(那些直连 `Player`,零延迟);
+    /// 视频尺寸也不在这里(控件每帧要用,走 `FrameSlot` 的原子)。
     ///
     /// 引擎线程已经退出时,这里会补一条 `error`(`"engine thread is gone"`),
     /// 免得 UI 以为一切正常。

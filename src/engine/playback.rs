@@ -12,16 +12,17 @@ use erika::presenter::PresenterRuntime;
 
 use super::ErikaEngine;
 use crate::cmd::PlaybackCmd;
+use crate::engine::video_size_of;
 
 impl ErikaEngine {
     /// 生命周期 / 传输命令的总入口。
     pub(super) fn on_playback(&mut self, cmd: PlaybackCmd, ctx: &ActorContext<Self>) {
         match cmd {
             PlaybackCmd::Open(req) => self.open(req, ctx),
-            PlaybackCmd::Stop => self.stop(ctx),
-            PlaybackCmd::Play => self.control(ctx, "play", PresenterRuntime::play),
-            PlaybackCmd::Pause => self.control(ctx, "pause", PresenterRuntime::pause),
-            PlaybackCmd::Seek(pos) => self.control(ctx, "seek", move |p| p.seek(pos)),
+            PlaybackCmd::Stop => self.stop(),
+            PlaybackCmd::Play => self.control("play", PresenterRuntime::play),
+            PlaybackCmd::Pause => self.control("pause", PresenterRuntime::pause),
+            PlaybackCmd::Seek(pos) => self.control("seek", move |p| p.seek(pos)),
         }
     }
 
@@ -30,14 +31,14 @@ impl ErikaEngine {
         // 必须在 `presenter.open` 之前取：它一执行媒体就换了。
         let had_media = self.presenter.player().has_open_media();
 
-        // 换片:会话代次 +1(做差值的消费者靠它重置基线)
-        // 先让 UI 看到"打开中"，再去做阻塞的活
+        // 作废当前帧（`FrameSlot::clear` 会把代号 +1，控件据此知道"没有画面了"）。
+        // 先让 UI 看到"打开中"，再去做阻塞的活。
         self.frames.clear();
         // 清控制面错误（换片了，上一次 open / seek 的失败已经没有意义）。
         // **不动 `video_unavailable`**：那是机器能力（驱动缺扩展 / GSK 接不了 dma-buf），
         // 换片不会让它变好；清了只会让它再失败一次。
         self.error = None;
-        ctx.update_state(self.current_status());
+        self.publish(ctx);
 
         match self.presenter.open(req) {
             Ok(()) => {
@@ -54,18 +55,23 @@ impl ErikaEngine {
                 if had_media {
                     self.presenter.clear_danmaku();
                 }
+
+                // 视频尺寸：`open` 是同步 probe，这时轨道已经有了。写给控件算内接矩形 ——
+                // 漏了这一步 `export_size` 会退回整块画布（5 倍像素）。
+                // （`publish` 里还有一层兜底：尺寸仍是"不知道"时会再查一次。）
+                self.frames.set_video_size(video_size_of(&self.presenter));
             }
             Err(e) => {
                 // 锁外阻塞
                 self.error = Some(format!("open: {e}"));
             }
         }
-        ctx.update_state(self.current_status());
+        self.publish(ctx);
     }
 
     /// 停播。状态由 erika 自己维护:停完是 `PlayerState::Stopped`,而**媒体仍然开着**
     /// (`has_open_media()` 为 true、`duration` 还在、位置归 0)。
-    fn stop(&mut self, ctx: &ActorContext<Self>) {
+    fn stop(&mut self) {
         // 没媒体时**什么都不做**：不投命令、不报错。
         // 命令队列保序，所以这里读到的是真实状态（Open 已经执行过），不是意图。
         if !self.presenter.player().has_open_media() {
@@ -74,6 +80,6 @@ impl ErikaEngine {
         // 画面作废 + 复位请求旗标，否则 stop 之后第一条 Wake 可能把旧帧又推出去
         self.frames.clear();
         self.request.want_frame.store(false, Ordering::Release);
-        self.control(ctx, "stop", PresenterRuntime::stop);
+        self.control("stop", PresenterRuntime::stop);
     }
 }

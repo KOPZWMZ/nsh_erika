@@ -4,7 +4,7 @@
 //!
 //! | 文件 | 负责 |
 //! |---|---|
-//! | `mod.rs` | `ErikaEngine` 的字段 / `run` 循环 / `on_cmd` 分派 / 状态发布 |
+//! | `engine.rs` | `ErikaEngine` 的字段 / `run` 循环 / `on_cmd` 分派 / 状态发布 |
 //! | `playback.rs` | `open` / `stop` / `play` / `pause` / `seek` |
 //! | `settings.rs` | 音量 / 倍速 / 音轨 / 字幕轨 |
 //! | `danmaku.rs` | 弹幕开关 / 加轨 / 样式读改写 / 清空 |
@@ -19,8 +19,7 @@ use std::time::{Duration, Instant};
 use crate::ErikaStatus;
 use crate::cmd::ErikaCmd;
 use crate::player::{
-    DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuText,
-    PresenterObservation, SubtitleSnapshot,
+    DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuText, SubtitleSnapshot,
 };
 use crate::source::{FrameSlot, Request};
 use actor_lite::{ActorContext, ActorCore, CmdWait, ThreadActor};
@@ -34,10 +33,11 @@ mod render;
 mod settings;
 mod subtitle;
 
-/// 没有命令时,引擎线程多久醒一次(排空 erika 事件 / 兜底采样状态 / 保活泵)。
+/// 没有命令时,引擎线程多久醒一次(排空 erika 事件 / 保活泵)。
 ///
 /// 有命令进来会立刻唤醒,这个超时只负责"什么都不发生"时的那点轮询。
-/// 保活泵(`KEEPALIVE_EVERY`)也靠它触发,所以这里必须明显小于那个间隔。
+/// 保活泵([`KEEPALIVE_EVERY`])由 `run` 循环**每轮独立调用**,不依赖这个超时是否触发 ——
+/// 但没人要帧时循环只能靠超时转起来,所以这里必须明显小于那个间隔。
 const IDLE: Duration = Duration::from_millis(10);
 
 /// 没人要帧时,引擎自己多久泵一次(音频 / 时钟 / 解码),**不发帧**。
@@ -46,17 +46,14 @@ const IDLE: Duration = Duration::from_millis(10);
 /// 上游 `DEFAULT_AUDIO_LEAD_TIME` 是 120ms(音频领先时钟 120ms 就够),50ms 一次留了两倍余量。
 const KEEPALIVE_EVERY: Duration = Duration::from_millis(50);
 
-/// 状态快照的**兜底**刷新间隔。
-///
-/// 平时靠事件驱动(erika 的 `PlayerEvent` + 每条命令后各发一次),
-/// 但 `stats` / 音频计数这类观测量是连续变化的、没有事件 —— 靠这个周期采样兜住。
-const STATUS_EVERY: Duration = Duration::from_millis(1000);
-
 /// 引擎发给 UI 的事件。**只是"去重新拉一次状态"的通知**,不带数据 ——
 /// 状态本身在 actor 的 `watch` 里,事件只负责把 UI 叫醒。
 #[derive(Clone, Debug)]
 pub enum ErikaEvent {
-    /// 状态变了(离散事件 / 命令生效 / 兜底采样发现差异)。
+    /// 状态可能变了:每条命令处理完、以及收到 erika 的离散事件时各发一次。
+    ///
+    /// 不判等 —— 命令是用户动作,重复一次也无所谓;判等要克隆 + 比较整包状态,更贵。
+    /// 所以收到它之后**重拉一次状态**就对,但别假设"每次值都真的不同"。
     Changed,
 }
 /// 引擎事件流:[`ErikaPlayer::subscribe`](crate::ErikaPlayer::subscribe) 返回它。
@@ -108,11 +105,6 @@ pub(crate) struct ErikaEngine {
     /// erika 的事件流。播放中 `PositionChanged` 每 2ms 一条,所以每 tick 排空并丢弃,
     /// 只把"离散事件"(状态/轨道/缓冲/错误/播完)当成"该通知 UI"的信号。
     player_events: Receiver<PlayerEvent>,
-    /// 上一次发布出去的状态。没变就**不动 watch、不发事件**。
-    ///
-    /// 必需：`ActorContext` 没有"读当前 state"的接口，而 `current_status()` 每次都要
-    /// 现组一份（字面量克隆 + 一吨字段），所以判等只能自己留一份。
-    published: Option<ErikaStatus>,
     /// 上一轮是否真的出了帧(只给 `NSH_ERIKA_TRACE` 探针看,不参与逻辑)
     last_rendered: bool,
     /// 上一次泵音频的时刻(出帧也算泵),节流 `KEEPALIVE_EVERY`
@@ -123,17 +115,14 @@ pub(crate) struct ErikaEngine {
     ///
     /// 一次置上、不再清除（换片也不清：这是机器能力，不是媒体状态，见 `playback.rs::open`）。
     /// 它同时**就是门卫**：置上之后 `pump_frame` 不再调导出，所以不会重复失败、
-    /// 也就不需要额外的"已报告"标记。
-    video_unavailable: Option<String>,
+    /// 也就不需要额外的"已报告"标记。原因只进日志和 `error`，不留在字段里。
+    video_unavailable: bool,
     /// 保活泵失败过。`render_tick` 会继续重试（可能只是一次瞬时错误），
     /// 所以这是**边沿**标记：失败记一次、成功就复位，日志不刷屏。
     keepalive_failed: bool,
 
     /// 诊断（`NSH_ERIKA_TRACE=1`）：每 60 次出帧一行各阶段耗时，实现在 `trace.rs`。
     timings_probe: Option<crate::trace::TimingsProbe>,
-
-    /// 兜底采样的节流(1s)
-    last_publish: Instant,
 }
 impl ErikaEngine {
     pub(crate) fn new(frames: Arc<FrameSlot>, request: Arc<Request>) -> Self {
@@ -145,14 +134,12 @@ impl ErikaEngine {
             request,
             error: None,
             player_events,
-            published: None,
-            video_unavailable: None,
+            video_unavailable: false,
             keepalive_failed: false,
             timings_probe: crate::trace::TimingsProbe::from_env(),
             last_rendered: false,
             last_keepalive: Instant::now(),
             tick_probe: crate::trace::RateProbe::from_env("engine tick"),
-            last_publish: Instant::now(),
         }
     }
     pub(crate) fn player_clone(&self) -> Player {
@@ -162,13 +149,12 @@ impl ErikaEngine {
     /// 控制面:执行一条命令,返回"本轮要不要出帧"。
     ///
     /// 只有 [`RenderCmd::Wake`](crate::cmd::RenderCmd::Wake) 是 `true`。渲染家族**不在这里**
-    /// 顺手发布状态 —— `Wake` 每帧都来,发布是白烧;其余四族处理完立刻发布一次
-    /// (没变化就什么都不做),并重置兜底采样计时。
+    /// 顺手发布状态 —— `Wake` 每帧都来,发布是白烧;其余各族处理完立刻发布一次。
     fn on_cmd(&mut self, cmd: ErikaCmd, ctx: &ActorContext<Self>) -> bool {
         match cmd {
             ErikaCmd::Render(c) => return self.on_render(c, ctx), // Wake → true
             ErikaCmd::Playback(c) => self.on_playback(c, ctx),
-            ErikaCmd::Settings(c) => self.on_settings(c, ctx),
+            ErikaCmd::Settings(c) => self.on_settings(c),
             ErikaCmd::Danmaku(c) => self.on_danmaku(c),
             ErikaCmd::Subtitle(c) => self.on_subtitle(c),
             ErikaCmd::Call(job) => job(&mut self.presenter), // 逃生舱:不代捕错误
@@ -181,51 +167,38 @@ impl ErikaEngine {
             }
         }
         self.publish(ctx);
-        self.last_publish = Instant::now();
+
         false
     }
     /// 发一条控制命令；失败写进 `error`（没媒体时 erika 会自己报错，不用我们挡）。
     fn control(
         &mut self,
-        ctx: &ActorContext<Self>,
         what: &'static str,
         f: impl FnOnce(&mut PresenterRuntime) -> erika::Result<()>,
     ) {
         if let Err(e) = f(&mut self.presenter) {
-            self.set_error(ctx, format!("{what}: {e}"));
+            self.error = Some(format!("{what}: {e}"));
         }
     }
 
     /// 记下"本机出不了帧"。**第一次**返回要报出去的文案，之后返回 `None`（不重复报）。
     fn latch_video_unavailable(&mut self, reason: String) -> Option<String> {
-        if self.video_unavailable.is_some() {
+        if self.video_unavailable {
             return None;
         }
+        self.video_unavailable = true;
         let message = format!("出帧路径不可用，本机不再尝试: {reason}");
         log::warn!("nsh-erika: {message}");
-        self.video_unavailable = Some(reason);
         Some(message)
     }
 
     fn set_error(&mut self, ctx: &ActorContext<Self>, message: String) {
         self.error = Some(message);
-        self.publish(ctx); // 错误很罕见，就地发一次
+        self.publish(ctx);
     }
     /// 组一份状态（只读 presenter + 自己的字段）
     fn current_status(&self) -> ErikaStatus {
-        let s = self.presenter.runtime_snapshot(); // 引擎线程,1s 一次(或每次变化),700B 构造无所谓
         ErikaStatus {
-            presenter: PresenterObservation {
-                audio_written_frames: s.audio_output_written_frames,
-                audio_queued: s.audio_output_queued_duration,
-                video_size: self
-                    .presenter
-                    .player()
-                    .tracks()
-                    .into_iter()
-                    .find(|track| track.kind == erika::TrackKind::Video && track.width > 0)
-                    .map(|track| (track.width, track.height)),
-            },
             // 字幕:样式整包 + 延迟(上游就这两块;font_scale / supersampling 没 getter,读不到)
             subtitle: SubtitleSnapshot::from_parts(
                 self.presenter.subtitle_style(),
@@ -252,24 +225,16 @@ impl ErikaEngine {
     }
     /// 状态面:把状态发布到 actor 的 `watch`,并给 UI 发一条"变了"的通知。
     ///
-    /// **没变就什么都不做** —— 不动 watch、不发事件,UI 也就不会白重渲染。
+    /// 只在**命令之后**和**erika 离散事件之后**被调用 —— 那两处都是真的发生了点什么，
+    /// 所以不判等：`current_status()` 现在只是几个小 clone，比较一遍反而更贵。
     fn publish(&mut self, ctx: &ActorContext<Self>) {
-        let next = self.current_status();
-        if self.published.as_ref() == Some(&next) {
-            return;
+        // 尺寸自愈：只在"还不知道"时才查一次 `tracks()`（一次 Vec 分配）。
+        // `open` 时通常已经写上了；万一那时轨道还没 probe 完，这里补上。
+        if self.frames.video_size().is_none() {
+            self.frames.set_video_size(video_size_of(&self.presenter));
         }
-        self.published = Some(next.clone());
-        ctx.update_state(next);
+        ctx.update_state(self.current_status());
         ctx.send_event(ErikaEvent::Changed);
-    }
-
-    /// 兜底节流版:观测量(stats / 音频计数)没有事件,靠它按 1s 采样一次。
-    /// **时间戳必须在这里更新** —— 放到 `run` 的每轮循环里会让 `elapsed()` 永远是 0。
-    fn publish_if_due(&mut self, ctx: &ActorContext<Self>) {
-        if self.last_publish.elapsed() >= STATUS_EVERY {
-            self.publish(ctx);
-            self.last_publish = Instant::now();
-        }
     }
 
     /// 排空 erika 的事件流。返回"有没有值得通知 UI 的事"。
@@ -335,7 +300,6 @@ impl ThreadActor for ErikaEngine {
             if self.drain_player_events() {
                 self.publish(&ctx);
             }
-            self.publish_if_due(&ctx);
         }
     }
 }
@@ -354,4 +318,13 @@ fn new_presenter() -> Result<PresenterRuntime, String> {
         ..PresenterConfig::default()
     })
     .map_err(|error| format!("PresenterRuntime 创建失败: {error}"))
+}
+/// 视频轨的原始尺寸。没有视频轨 / 还没 probe 完就是 `None`。
+fn video_size_of(presenter: &PresenterRuntime) -> Option<(u32, u32)> {
+    presenter
+        .player()
+        .tracks()
+        .into_iter()
+        .find(|track| track.kind == erika::TrackKind::Video && track.width > 0)
+        .map(|track| (track.width, track.height))
 }

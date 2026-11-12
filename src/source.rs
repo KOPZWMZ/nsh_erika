@@ -10,8 +10,9 @@
 //!
 //! NSH 的组件边界只能过 JSON（`native(...).prop(name, value)`），句柄过不去。所以帧源在
 //! 构造时领一个进程内唯一的号（[`ErikaVideoSource::id`]），登记在进程级注册表里；控件
-//! 拿号就能找回它（[`ErikaVideoSource::resolve`]）。注册表只存**弱引用**，最后一个帧源
-//! drop 时自动摘除。
+//! 拿号就能找回它（[`ErikaVideoSource::resolve`]）。注册表持**强引用**（不能是弱引用：
+//! 页面函数返回后 `ErikaVideoSource` 这个局部值就 drop 了，而控件的 prop 要到挂载时才送到），
+//! 由播放句柄负责摘除 —— 最后一个 [`ErikaPlayer`](crate::ErikaPlayer) drop 时自动清掉。
 //!
 //! **只有一条出帧路径**：erika 导出的线性 dma-buf。没有 CPU 回读兜底 —— 宿主
 //! （GTK/GSK）导不进来就没画面（见 `dev_doc/nsh-erika-status.md` §8）。
@@ -30,6 +31,11 @@ pub(crate) struct FrameSlot {
     texture: Mutex<Option<Arc<erika::DmabufFrame>>>,
     /// 每写一次 +1。渲染层靠它跳过"同一帧的重复建纹理"。
     generation: AtomicU64,
+    /// 视频原始尺寸 `(w << 32) | h`；0 = 还不知道。引擎写、控件每帧读。
+    ///
+    /// 放这里而不是 `ErikaStatus`：它是**帧的元信息**，控件每帧都要，而状态通道的语义是
+    /// "变了才发"。一次写 + 每帧原子读，比每帧填结构体再判等便宜得多。
+    video_size: AtomicU64,
 }
 
 impl FrameSlot {
@@ -37,7 +43,20 @@ impl FrameSlot {
         Self {
             texture: Mutex::new(None),
             generation: AtomicU64::new(0),
+            video_size: AtomicU64::new(0),
         }
+    }
+
+    /// 引擎侧：记下视频原始尺寸（`None` = 没有视频轨 / 还不知道）。
+    pub(crate) fn set_video_size(&self, size: Option<(u32, u32)>) {
+        let packed = size.map_or(0, |(w, h)| (u64::from(w) << 32) | u64::from(h));
+        self.video_size.store(packed, Ordering::Release);
+    }
+
+    /// 控件侧：视频原始尺寸，`None` = 还不知道。
+    pub(crate) fn video_size(&self) -> Option<(u32, u32)> {
+        let packed = self.video_size.load(Ordering::Acquire);
+        (packed != 0).then(|| ((packed >> 32) as u32, packed as u32))
     }
 
     /// 引擎侧：写入新帧（替换旧的 → 旧的那个随引用计数归零回收，fd 随之关闭）
@@ -181,7 +200,6 @@ impl Slot {
         }
     }
 }
-
 /// 显示句柄：交给 `erika.video` 控件的东西。
 ///
 /// 由 [`ErikaPlayer::new`](crate::ErikaPlayer::new) 一起交出；`Clone` 只是 Arc 加一，
@@ -216,13 +234,8 @@ impl ErikaVideoSource {
 
     /// 视频原始宽高比（没打开 / 没有视频轨时为 `None`）。控件用它算内接矩形。
     pub(crate) fn video_aspect(&self) -> Option<f32> {
-        let (width, height) = self.slot.engine.handle.get_state().presenter.video_size?;
+        let (width, height) = self.slot.frames.video_size()?;
         (width > 0 && height > 0).then(|| width as f32 / height as f32)
-    }
-
-    /// 诊断用：控件的 tick 探针要读音频写入量 / 设备环排队时长。
-    pub(crate) fn status(&self) -> crate::ErikaStatus {
-        self.slot.engine.handle.get_state()
     }
 
     /// **渲染层每帧调这个**，请求一帧（非阻塞，60Hz 也只会让引擎处理一次）。

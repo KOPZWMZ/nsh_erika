@@ -10,14 +10,14 @@
 //! |---|---|---|
 //! | [`RateProbe`] | `engine.rs` 的 `run` 循环 | 引擎线程每秒醒几次、这一轮出帧了没有 |
 //! | [`TimingsProbe`] | `engine/render.rs::pump_frame` | erika 内部各阶段耗时（pump/sub/video/audio/danmaku/render） |
-//! | [`GtkTickProbe`] | `frames.rs` 的 tick 回调 | GTK 每秒 tick/paint 几次、音频写入量、队列深度、最大间隔 |
+//! | [`GtkTickProbe`] | `frames.rs` 的 tick 回调 | GTK 每秒 tick/paint 几次、引擎发了几帧、最大间隔 |
 //!
 //! 两行一起看就能分清"是谁在降频"：
 //!
 //! ```text
 //! NSH_ERIKA_TRACE=1 nsh run
 //! [nsh-erika] engine tick ≈100/s render=true has_media=true
-//! [nsh-erika] gtk tick ≈60/s paint ≈60/s frames ≈60/s audio≈48.0k/s queued=118ms maxgap=18ms
+//! [nsh-erika] gtk tick ≈60/s paint ≈60/s frames ≈60/s maxgap=18ms
 //! ```
 //!
 //! - `engine tick` 在、`gtk tick` 不出现 → tick 回调停了，问题在 GTK 那一侧；
@@ -25,8 +25,9 @@
 //!   引擎只跑保活泵（每 50ms 一次 `render_tick`）：画面停、声音继续，这是预期行为；
 //! - 两个都在但 `frames < tick` → 引擎出帧跟不上，看 `耗时 …` 那行（[`TimingsProbe`]）。
 //!
-//! 另外 `frames.rs` 里还有两条**只为确认"有没有出画"**的一次性日志（`第一帧 dma-buf …`）
-//! 和一次性告警（导入失败 / 导出失败 / 保活失败）—— 那些不是探针，见各自的注释。
+//! 另外还有几条**只为确认"有没有出画"**的一次性日志，不是探针（见各自的注释）：
+//! `第一帧 dma-buf …`（`frames.rs`）、`erika.video: tick …`（每 120 tick 一行）、
+//! 保活泵失败的一次性 WARN。导入 / 导出失败则会写进 `status().error`，不只打日志。
 
 use std::time::{Duration, Instant};
 
@@ -108,16 +109,12 @@ impl TimingsProbe {
 /// `NSH_ERIKA_TRACE=1` 时的 GTK tick 统计：每秒一行，专门回答"GTK 到底掉没掉帧"。
 ///
 /// ```text
-/// [nsh-erika] gtk tick ≈60/s paint ≈60/s frames ≈60/s audio≈48.0k/s queued=118ms maxgap=18ms
-/// [nsh-erika] gtk tick ≈1/s  paint ≈1/s  frames ≈1/s  audio≈0/s queued=?       maxgap=1000ms
+/// [nsh-erika] gtk tick ≈60/s paint ≈60/s frames ≈60/s maxgap=18ms
+/// [nsh-erika] gtk tick ≈1/s  paint ≈1/s  frames ≈1/s  maxgap=1000ms
 /// ```
 ///
 /// - `tick`：帧时钟回调次数/s —— 出帧频率的**唯一来源**；
 /// - `paint`：真正换上新纹理的次数/s（每 tick 至多一次）；
-/// - `audio`：写进音频设备的 PCM 帧数增量/s（`audio_written_frames`；44.1k/48k 正常，
-///   `≈0/s` = 没声音）；
-/// - `queued`：音频设备环里还排着多少毫秒（`audio_queued`；正常一百多毫秒，`?` = 设备
-///   还没起来、`0ms` 或一直不涨 = 没人往环里写）；
 /// - `frames`：引擎**发布到帧槽的帧数**增量/s（`FrameSlot::generation` 的增量，引擎发布到帧槽的
 ///   次数都算）。`frames > paint` = 引擎出了、控件没换上；`frames < tick` = 引擎跟不上。
 ///   三个数一起看就能定位断点：
@@ -137,8 +134,6 @@ pub(crate) struct GtkTickProbe {
     max_gap: Duration,
     /// 上次打印时的帧槽 `generation`，用来算每秒发布帧数。
     last_generation: u64,
-    /// 上次打印时的 `audio_written_frames`，用来算每秒写入的 PCM 帧数。
-    last_audio: u64,
     /// 这一秒内帧槽 `generation` 前进了多少（= 引擎发布了几帧）。
     published: u64,
     /// 第一次打印还没有基线（否则会把"从开播到现在的总帧数"当成每秒帧数）。
@@ -156,7 +151,6 @@ impl GtkTickProbe {
             last: None,
             max_gap: Duration::ZERO,
             last_generation: 0,
-            last_audio: 0,
             published: 0,
             primed: false,
         })
@@ -181,31 +175,13 @@ impl GtkTickProbe {
     }
 
     /// 打印这一秒的统计并清零。
-    pub(crate) fn print(&mut self, now: Instant, status: &crate::ErikaStatus) {
+    pub(crate) fn print(&mut self, now: Instant) {
         let elapsed = now.saturating_duration_since(self.started);
         let per_second = |count: u64| count as f64 / elapsed.as_secs_f64();
         // 第一行只用来建基线（否则会把"开播以来的总数"当成每秒值）。
         let published = if self.primed { self.published } else { 0 };
-        let audio = if self.primed {
-            status
-                .presenter
-                .audio_written_frames
-                .saturating_sub(self.last_audio)
-        } else {
-            0
-        };
-        let audio_rate = per_second(audio);
-        let audio_text = if audio_rate >= 1000.0 {
-            format!("{:.1}k/s", audio_rate / 1000.0)
-        } else {
-            format!("{:.0}/s", audio_rate)
-        };
-        let queued = status.presenter.audio_queued.map_or_else(
-            || "?".to_string(),
-            |value| format!("{:.0}ms", value.as_secs_f64() * 1000.0),
-        );
         eprintln!(
-            "[nsh-erika] gtk tick ≈{:.0}/s paint ≈{:.0}/s frames ≈{:.0}/s audio≈{audio_text} queued={queued} maxgap={:.0}ms",
+            "[nsh-erika] gtk tick ≈{:.0}/s paint ≈{:.0}/s frames ≈{:.0}/s maxgap={:.0}ms",
             per_second(self.ticks.into()),
             per_second(self.paints.into()),
             per_second(published),
@@ -216,7 +192,6 @@ impl GtkTickProbe {
         self.paints = 0;
         self.max_gap = Duration::ZERO;
         self.published = 0;
-        self.last_audio = status.presenter.audio_written_frames;
         self.primed = true;
     }
 }

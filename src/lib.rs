@@ -36,11 +36,11 @@
 //! ```text
 //! ┌ 内核层 —— 不认识任何 UI 框架 ────────────────────────────────────────┐
 //! │ engine/     ErikaEngine(actor):PresenterRuntime 的唯一 owner          │
-//! │   mod.rs      结构体 + run 循环 + on_cmd 分派 + 状态发布               │
+//! │   engine.rs   结构体 + run 循环 + on_cmd 分派 + 状态发布               │
 //! │   render.rs   on_render + pump_frame：Wake / 出帧 / 保活泵            │
 //! │ cmd.rs      命令词汇表:ErikaCmd 五族                                  │
 //! │ player.rs   ErikaPlayer + ErikaStatus                                │
-//! │ source.rs   ErikaVideoSource + FrameSlot（一格 dma-buf 帧槽）        │
+//! │ source.rs   ErikaVideoSource + FrameSlot（帧槽 + 视频尺寸）           │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ┌ 适配层 —— 唯一允许出现 gtk 的地方 ───────────────────────────────────┐
 //! │ component.rs  ErikaView：`gtk::Picture` + tick 回调 + `source` prop   │
@@ -54,8 +54,12 @@
 //! 导入外部纹理。
 //!
 //! **只有这一条路**：没有 CPU 回读兜底（`capture_frame_rgba` 是截图 API，按设计不启动
-//! 音频、也不计入渲染帧，见 dev_doc §8）。宿主（GTK/GSK）导不进来就没有画面；这种机器上
-//! 产品策略是整条降级到 NSH 内置 `<video>`（GStreamer）。
+//! 音频、也不计入渲染帧，见 dev_doc §8）。宿主（GTK/GSK）导不进来就没有画面。
+//!
+//! 导出或导入失败时，原因会写进 [`ErikaStatus::error`]（`player.status().error` /
+//! [`ErikaPlayer::last_error`]）并且**之后不再尝试导出**；应用据此整条降级到 NSH 内置
+//! `<video>`（GStreamer）。`ErikaPlayer::new()` 本身就失败（没有可用的 Vulkan 设备）时
+//! 是同步 `Err`，那时压根别建控件。
 //!
 //! ## 用法：句柄在外面，控件只显示
 //!
@@ -113,8 +117,7 @@ pub use erika::PlayerState;
 pub use player::{
     BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuSnapshot,
     DanmakuText, ErikaDanmaku, ErikaPlayer, ErikaStatus, ErikaSubtitle, ErikaTracks, FilterRule,
-    PresenterObservation, SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot,
-    SubtitleTextStyle,
+    SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
 };
 pub use source::{ErikaVideoSource, FrameRequest};
 // 句柄的 `call` / `status` 直接暴露 erika 自己的类型:不另造一层。
@@ -137,23 +140,6 @@ pub const COMPONENT_NAME: &str = "erika.video";
 /// 去那里找固定名字的入口，不能写在这个库里面。
 #[cfg(target_os = "linux")]
 pub fn register(components: &nsh_platform_linux::Components) {
-    install(components);
-}
-
-/// 装上 `erika.video`（注册原生控件）。应用启动时调**一次**：
-///
-/// ```ignore
-/// #[native_components(linux)]
-/// fn components(components: &nsh_platform_linux::Components) {
-///     nsh_erika::install(components);
-/// }
-/// ```
-///
-/// 这一行去不掉：`Components` 只在这个函数里交给应用（NSH 内部是每个 view 一个，
-/// 不是全局单例），所以我们没法自己拿到它。除此之外使用者看不到任何东西 ——
-/// 没有组件名、没有 prop、没有 id：页面里只有 [`ErikaPlayer::new`] 和 [`ErikaVideo`]。
-#[cfg(target_os = "linux")]
-pub fn install(components: &nsh_platform_linux::Components) {
     components.register(COMPONENT_NAME, component::factory());
 }
 
