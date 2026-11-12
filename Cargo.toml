@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 description = "erika 播放内核的 NSH 封装：native component `erika.video`"
 
+
 [dependencies]
 # native component 的 `set_prop` / `emit` 用到的 JSON 类型与元素 API。
 nsh-core = "0.4.0"

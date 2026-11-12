@@ -14,11 +14,11 @@
 //!     nsh_erika::register(components);
 //! }
 //!
-//! // 页面
-//! let player = ErikaPlayer::new()?.0;             // 句柄，Clone + Send + Sync
+//! // 页面：句柄和帧源都在外面创建
+//! let player = ErikaPlayer::new()?;
 //! player.open(MediaRequest::new(uri));
 //! player.play();
-//! view().child(native("erika.video").prop("src", ...).prop("paused", ...))
+//! view().child(nsh_erika::ErikaVideo(&player));    // 控件只负责显示
 //! ```
 //!
 //! ## 读直连,写走队列
@@ -43,7 +43,7 @@
 //! │ source.rs   ErikaVideoSource + FrameSlot（一格 dma-buf 帧槽）        │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ┌ 适配层 —— 唯一允许出现 gtk 的地方 ───────────────────────────────────┐
-//! │ component.rs  ErikaView：`gtk::Picture` + tick 回调 + prop 分发       │
+//! │ component.rs  ErikaView：`gtk::Picture` + tick 回调 + `source` prop   │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -56,6 +56,28 @@
 //! **只有这一条路**：没有 CPU 回读兜底（`capture_frame_rgba` 是截图 API，按设计不启动
 //! 音频、也不计入渲染帧，见 dev_doc §8）。宿主（GTK/GSK）导不进来就没有画面；这种机器上
 //! 产品策略是整条降级到 NSH 内置 `<video>`（GStreamer）。
+//!
+//! ## 用法：句柄在外面，控件只显示
+//!
+//! ```no_run
+//! # use nsh_core::prelude::*;
+//! # fn page() -> impl IntoElement {
+//! // 1) 句柄在外面创建
+//! let player = nsh_erika::ErikaPlayer::new().expect("引擎起不来");
+//! player.open(nsh_erika::MediaRequest::new("/path/to/video.mkv"));
+//! player.play();
+//!
+//! // 2) 页面里只放"显示"；控制条用应用自己的 NSH 元素画，直接调句柄
+//! view()
+//!     .flex_col()
+//!     .flex_1()
+//!     .child(nsh_erika::ErikaVideo(&player).flex_1())
+//!     .child(text("控制条写在这：button().on_press(move || player.pause())"))
+//! # }
+//! ```
+//!
+//! 控件**不自建引擎**、也没有任何控制 prop：它的 prop 表只有 `source`（帧源的号）。
+//! 为什么是号而不是句柄 —— NSH 的组件边界只能过 JSON，见 [`video`] 的说明。
 //!
 //! ## 平台
 //!
@@ -73,6 +95,8 @@ compile_error!(
 
 mod cmd;
 mod engine;
+#[cfg(target_os = "linux")]
+mod frames;
 mod player;
 mod source;
 mod trace;
@@ -101,7 +125,10 @@ pub use erika::{ChapterInfo, TrackInfo, TrackKind, TrackSelection};
 pub use erika::subtitle::SubtitleTrackConfig;
 pub use erika::MediaRequest;
 
-/// 原生控件名：页面里写 `native("erika.video")`。
+/// 原生控件名。
+///
+/// 一般不用直接写：用 [`video`]（`nsh_erika::video(&source)`）就会带上 `source` prop。
+/// 手写时是 `native(nsh_erika::COMPONENT_NAME).prop("source", source.id())`。
 pub const COMPONENT_NAME: &str = "erika.video";
 
 /// 把 `erika.video` 注册进 `components`。
@@ -110,5 +137,67 @@ pub const COMPONENT_NAME: &str = "erika.video";
 /// 去那里找固定名字的入口，不能写在这个库里面。
 #[cfg(target_os = "linux")]
 pub fn register(components: &nsh_platform_linux::Components) {
+    install(components);
+}
+
+/// 装上 `erika.video`（注册原生控件）。应用启动时调**一次**：
+///
+/// ```ignore
+/// #[native_components(linux)]
+/// fn components(components: &nsh_platform_linux::Components) {
+///     nsh_erika::install(components);
+/// }
+/// ```
+///
+/// 这一行去不掉：`Components` 只在这个函数里交给应用（NSH 内部是每个 view 一个，
+/// 不是全局单例），所以我们没法自己拿到它。除此之外使用者看不到任何东西 ——
+/// 没有组件名、没有 prop、没有 id：页面里只有 [`ErikaPlayer::new`] 和 [`ErikaVideo`]。
+#[cfg(target_os = "linux")]
+pub fn install(components: &nsh_platform_linux::Components) {
     components.register(COMPONENT_NAME, component::factory());
+}
+
+/// 把帧源显示到页面里：`view().child(nsh_erika::video(&source))`。
+///
+/// [`ErikaVideoSource`] 由 [`ErikaPlayer::new`] 和播放句柄一起交出：句柄留在外面控制，
+/// 帧源交给控件显示。这个函数只是把"必须给一个帧源"变成编译期约束 ——
+/// 内部就是 `native("erika.video").prop("source", source.id())`，因为 NSH 的组件边界
+/// 只能过 JSON（句柄过不去），传的是帧源的号。
+///
+/// 想自己写也行：`native(nsh_erika::COMPONENT_NAME).prop("source", source.id())`，
+/// 只是那样"必须给帧源"就只剩运行期检查。
+#[cfg(target_os = "linux")]
+pub fn video(source: &ErikaVideoSource) -> nsh_core::prelude::NativeView {
+    view_for(source.id())
+}
+
+impl ErikaPlayer {
+    /// 这个播放器的画面：`view().child(player.video().flex_1())`。
+    ///
+    /// 和 [`video`] 是同一个东西，只是从播放句柄出发——一个播放器只能有一个画面源，
+    /// 所以不需要另外拿 [`ErikaVideoSource`]。返回的是普通的 NSH 元素，
+    /// `.flex_1()` / `.rounded(…)` 这些照常链式调用。
+    pub fn video(&self) -> nsh_core::prelude::NativeView {
+        view_for(self.source_id())
+    }
+}
+
+/// 一个播放器的画面：`view().child(ErikaVideo(&player).flex_1())`。
+///
+/// 这是对外的**唯一**画面入口 —— 里面做了三件事，使用者都看不到：把句柄换成一个号、
+/// 生成 `native("erika.video")` 元素、把号作为 `source` prop 放上去。返回的是普通
+/// NSH 元素，`.flex_1()` / `.rounded(…)` 这些照常链式调用。
+///
+/// 传 `&player` 或 `player.clone()` 都行（`Borrow`）。
+///
+/// 名字是 PascalCase 只是为了写起来像元素；NSH 自带的元素函数是 snake_case
+/// （`video()`、`text()`），两者风格上并不冲突。
+#[allow(non_snake_case)]
+pub fn ErikaVideo(player: impl std::borrow::Borrow<ErikaPlayer>) -> nsh_core::prelude::NativeView {
+    view_for(player.borrow().source_id())
+}
+
+/// 帧源号 → `erika.video` 元素。
+fn view_for(id: u64) -> nsh_core::prelude::NativeView {
+    nsh_core::prelude::native(COMPONENT_NAME).prop("source", nsh_core::JsonValue::from(id))
 }

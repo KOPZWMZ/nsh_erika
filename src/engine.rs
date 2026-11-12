@@ -44,10 +44,6 @@ const IDLE: Duration = Duration::from_millis(10);
 ///
 /// `export_frame_dmabuf` / `render_tick` 同时就是音频泵 —— 完全没人泵,音频环就会饿。
 /// 上游 `DEFAULT_AUDIO_LEAD_TIME` 是 120ms(音频领先时钟 120ms 就够),50ms 一次留了两倍余量。
-///
-/// 为什么不用上游的 `audio_only_tick()` 来做这件事:它会把视频解码挂起
-/// (`set_video_decode_suspended(true)`),而恢复时是一次真 seek + flush 音频环 ——
-/// 窗口可见性一抖就是连续爆音(dev_doc §7)。
 const KEEPALIVE_EVERY: Duration = Duration::from_millis(50);
 
 /// 状态快照的**兜底**刷新间隔。
@@ -316,7 +312,8 @@ impl ThreadActor for ErikaEngine {
             }
             if let Some(probe) = self.tick_probe.as_mut() {
                 // "这一轮到底出帧了没有 / 有没有媒体" —— 卡顿时先看这两个。
-                let (render, media) = (self.last_rendered, self.presenter.player().has_open_media());
+                let (render, media) =
+                    (self.last_rendered, self.presenter.player().has_open_media());
                 probe.tick(|| format!("render={render} has_media={media}"));
             }
             // erika 的离散事件(状态/轨道/错误/播完):采样采不到,必须靠事件
