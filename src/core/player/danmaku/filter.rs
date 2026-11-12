@@ -6,7 +6,7 @@
 use erika::danmaku::DanmakuLayoutConfig;
 
 use super::ErikaDanmaku;
-use crate::cmd::DanmakuCmd;
+use crate::core::cmd::DanmakuCmd;
 
 /// 按"弹幕模式"屏蔽哪几类。
 ///

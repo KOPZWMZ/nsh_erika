@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use erika::MediaRequest;
 
-use crate::player::{SubtitlePlacement, SubtitleTextStyle};
+use crate::core::player::{SubtitlePlacement, SubtitleTextStyle};
 use erika::danmaku::DanmakuLayoutConfig;
 use erika::presenter::PresenterRuntime;
 

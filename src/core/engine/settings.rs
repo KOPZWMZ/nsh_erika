@@ -8,7 +8,7 @@
 //! - **换轨**要先 quiesce 再 flush 音频环,否则旧音轨的 PCM 还会响几百毫秒。
 
 use super::ErikaEngine;
-use crate::cmd::SettingsCmd;
+use crate::core::cmd::SettingsCmd;
 
 impl ErikaEngine {
     /// 参数类命令的总入口。

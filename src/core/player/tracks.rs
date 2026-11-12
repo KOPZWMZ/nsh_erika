@@ -22,7 +22,7 @@ use erika::subtitle::SubtitleTrackConfig;
 use erika::{TrackInfo, TrackSelection};
 
 use super::ErikaPlayer;
-use crate::cmd::SettingsCmd;
+use crate::core::cmd::SettingsCmd;
 
 /// 轨道句柄：媒体轨道的读 / 选择，以及外部字幕的挂 / 摘。
 ///

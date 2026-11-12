@@ -6,7 +6,7 @@
 use erika::danmaku::{DanmakuLayoutConfig, DanmakuShadowStyle};
 
 use super::ErikaDanmaku;
-use crate::cmd::DanmakuCmd;
+use crate::core::cmd::DanmakuCmd;
 
 /// 弹幕的**绘制外观**:透明度 / 阴影 / 随机配色。
 ///

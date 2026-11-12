@@ -1,7 +1,11 @@
 //! `erika.video`：只要画面、不带控制条的原生控件。
 //!
+//! TODO(platform): 这个文件实际是 **Linux/GTK 适配层**（`gtk::Picture` + `FrameBinder`），
+//! 现在放在 crate 根只是历史位置。跨平台前建议和 `linux/frames.rs` 一起挪进 `src/linux/`
+//! （`component.rs` → `linux/component.rs`），`lib.rs` 里的 `cfg(target_os = "linux")` 不用变。
+//!
 //! 它就是一个 `gtk::Picture`：帧由引擎线程导出成线性 dma-buf，tick 回调里导入成
-//! `GdkDmabufTexture` 贴上去（那套在 [`crate::frames`] 里）。
+//! `GdkDmabufTexture` 贴上去（那套在 [`crate::linux::frames`] 里）。
 //!
 //! ## 控件不自建引擎
 //!
@@ -26,7 +30,7 @@ use nsh_core::JsonValue;
 use nsh_platform_linux::{ComponentContext, ComponentFactory, NativeComponent, gtk4 as gtk};
 
 use crate::ErikaVideoSource;
-use crate::frames::FrameBinder;
+use crate::linux::frames::FrameBinder;
 
 /// 注册用的工厂。
 pub(crate) fn factory() -> ComponentFactory {

@@ -17,11 +17,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::ErikaStatus;
-use crate::cmd::ErikaCmd;
-use crate::player::{
+use crate::core::cmd::ErikaCmd;
+use crate::core::player::{
     DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuText, SubtitleSnapshot,
 };
-use crate::source::{FrameSlot, Request};
+use crate::core::source::{FrameSlot, Request};
 use actor_lite::{ActorContext, ActorCore, CmdWait, ThreadActor};
 use crossbeam_channel::{Receiver, TryRecvError};
 
@@ -110,7 +110,7 @@ pub(crate) struct ErikaEngine {
     /// 上一次泵音频的时刻(出帧也算泵),节流 `KEEPALIVE_EVERY`
     last_keepalive: Instant,
     /// `NSH_ERIKA_TRACE=1` 时每秒打一行"引擎醒了多少次"(诊断用)
-    tick_probe: Option<crate::trace::RateProbe>,
+    tick_probe: Option<crate::core::trace::RateProbe>,
     /// 本机**没有可用的出帧路径**（导出失败或控件侧导入失败）。
     ///
     /// 一次置上、不再清除（换片也不清：这是机器能力，不是媒体状态，见 `playback.rs::open`）。
@@ -122,7 +122,7 @@ pub(crate) struct ErikaEngine {
     keepalive_failed: bool,
 
     /// 诊断（`NSH_ERIKA_TRACE=1`）：每 60 次出帧一行各阶段耗时，实现在 `trace.rs`。
-    timings_probe: Option<crate::trace::TimingsProbe>,
+    timings_probe: Option<crate::core::trace::TimingsProbe>,
 }
 impl ErikaEngine {
     pub(crate) fn new(frames: Arc<FrameSlot>, request: Arc<Request>) -> Self {
@@ -136,10 +136,10 @@ impl ErikaEngine {
             player_events,
             video_unavailable: false,
             keepalive_failed: false,
-            timings_probe: crate::trace::TimingsProbe::from_env(),
+            timings_probe: crate::core::trace::TimingsProbe::from_env(),
             last_rendered: false,
             last_keepalive: Instant::now(),
-            tick_probe: crate::trace::RateProbe::from_env("engine tick"),
+            tick_probe: crate::core::trace::RateProbe::from_env("engine tick"),
         }
     }
     pub(crate) fn player_clone(&self) -> Player {

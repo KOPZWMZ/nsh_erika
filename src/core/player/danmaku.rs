@@ -39,7 +39,7 @@
 
 use erika::danmaku::{DanmakuLayoutConfig, DanmakuTrackInfo};
 
-use crate::cmd::{DanmakuCmd, ErikaCmd};
+use crate::core::cmd::{DanmakuCmd, ErikaCmd};
 
 use super::EngineGuard;
 use std::sync::Arc;

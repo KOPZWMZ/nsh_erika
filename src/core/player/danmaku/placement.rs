@@ -6,7 +6,7 @@
 use erika::danmaku::DanmakuLayoutConfig;
 
 use super::ErikaDanmaku;
-use crate::cmd::DanmakuCmd;
+use crate::core::cmd::DanmakuCmd;
 
 /// 弹幕的**版面与节奏**。
 ///

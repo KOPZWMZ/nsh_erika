@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 use erika::danmaku::DanmakuLayoutConfig;
 
 use super::ErikaDanmaku;
-use crate::cmd::DanmakuCmd;
+use crate::core::cmd::DanmakuCmd;
 
 /// 弹幕的**密度与拥挤策略**。
 ///

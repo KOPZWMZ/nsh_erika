@@ -11,8 +11,8 @@ use erika::MediaRequest;
 use erika::presenter::PresenterRuntime;
 
 use super::ErikaEngine;
-use crate::cmd::PlaybackCmd;
-use crate::engine::video_size_of;
+use crate::core::cmd::PlaybackCmd;
+use crate::core::engine::video_size_of;
 
 impl ErikaEngine {
     /// 生命周期 / 传输命令的总入口。

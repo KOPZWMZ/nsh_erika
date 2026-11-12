@@ -73,10 +73,10 @@
 //! **别**把这个保活换成上游的 `audio_only_tick()`:它会挂起视频解码,恢复时是一次真
 //! seek + flush 音频环,窗口可见性一抖就是连续爆音(dev_doc §7 有完整的日志链)。
 
-use crate::cmd::{ErikaCmd, PlaybackCmd, SettingsCmd, SubtitleCmd};
-use crate::engine::ErikaEngine;
+use crate::core::cmd::{ErikaCmd, PlaybackCmd, SettingsCmd, SubtitleCmd};
+use crate::core::engine::ErikaEngine;
 
-use crate::source::{ErikaVideoSource, FrameSlot, Request};
+use crate::core::source::{ErikaVideoSource, FrameSlot, Request};
 
 use actor_lite::ActorHandle;
 
@@ -164,7 +164,7 @@ pub struct ErikaPlayer {
     player: erika::Player,
     /// 引擎 + 帧槽 + 出帧请求，和帧源共享。**播放句柄负责存活期**：最后一个
     /// `ErikaPlayer` drop 时把注册表里的那一条摘掉，控件下一帧自己停。
-    slot: Arc<crate::source::Slot>,
+    slot: Arc<crate::core::source::Slot>,
 }
 
 impl Clone for ErikaPlayer {
@@ -220,7 +220,7 @@ impl ErikaPlayer {
             .recv_timeout(Duration::from_secs(5))
             .map_err(|error| format!("引擎线程没能交出 Player: {error}"))?;
         let engine = Arc::new(EngineGuard { handle });
-        let slot = crate::source::Slot::new(engine, frames, request);
+        let slot = crate::core::source::Slot::new(engine, frames, request);
         Ok(Self { player, slot })
     }
     /// 这个播放器的帧源（显示句柄）。

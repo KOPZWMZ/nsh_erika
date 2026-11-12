@@ -25,7 +25,7 @@
 use erika::subtitle::SubtitleStyleConfig;
 
 use super::ErikaPlayer;
-use crate::cmd::SubtitleCmd;
+use crate::core::cmd::SubtitleCmd;
 
 mod placement;
 mod style;

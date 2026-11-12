@@ -126,6 +126,9 @@ impl TimingsProbe {
 /// ⚠️ tick 彻底停了（最小化）时**每秒不会有任何输出** —— "这一行消失"本身就是结论。
 /// ⚠️ 不要拿 `GdkFrameClock::fps()` 当基准：实测窗口被挡住、tick 掉到 1/s 时它照样报
 /// 57.8 —— 那是 GTK 按 refresh interval 估的**显示器**刷新率，不是实际出帧率。
+///
+/// TODO(platform): GTK/GSK 专用。macOS 的 tick 来自 `CVDisplayLink`/`CAMetalLayer`，
+/// Windows 走自己的呈现回调 —— 跨平台时各平台一份，或者抽成 `TickProbe` trait。
 pub(crate) struct GtkTickProbe {
     started: Instant,
     ticks: u32,

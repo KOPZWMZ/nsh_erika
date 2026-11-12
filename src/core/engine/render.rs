@@ -20,6 +20,10 @@
 //! 我们这边一个 Vulkan 设备都不用建。没有 CPU 回读兜底(见 dev_doc §8):导出失败就把
 //! 文案写进状态(`ErikaStatus::error`,应用据此降级到内置 `<video>`)、之后**不再尝试导出**,
 //! 上一张继续显示;音频改由保活泵继续喂。
+//!
+//! TODO(platform): 上面写的是 **Linux 的形状**。「要不要出帧 / 保活泵」这套策略是跨平台的，
+//! 平台相关的只有 `export_frame_dmabuf` 那一行：macOS 走 Metal 句柄、Windows 走 D3D 共享纹理。
+//! 拆的时候把 `pump_frame` 分成「决定出不出帧」（留在 core）+「按平台导出」（各平台实现）。
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -28,7 +32,7 @@ use std::time::Instant;
 use actor_lite::ActorContext;
 
 use super::{ErikaEngine, KEEPALIVE_EVERY};
-use crate::cmd::RenderCmd;
+use crate::core::cmd::RenderCmd;
 
 impl ErikaEngine {
     /// 出帧握手命令。返回值 = 本轮要不要出帧（`Wake` 恒为 `true`）。
@@ -60,6 +64,8 @@ impl ErikaEngine {
             (request.export.0, request.export.1, request.scale)
         };
 
+        // TODO(platform): 只有 Linux 的 erika 有 `export_frame_dmabuf`；
+        // macOS / Windows 换成各自的句柄导出（Metal / D3D），其余逻辑不动。
         let result = self.presenter.export_frame_dmabuf(width, height, scale);
         // 诊断：各阶段耗时，实现在 `trace.rs`（`NSH_ERIKA_TRACE=1` 才动）。
         if let Some(probe) = self.timings_probe.as_mut() {

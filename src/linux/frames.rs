@@ -54,10 +54,10 @@ impl FrameBinder {
         // 上一次贴上去的帧代号：没变就说明没有新帧，别重复建纹理。
         let painted = Rc::new(Cell::new(u64::MAX));
         let first = Rc::new(Cell::new(false));
-        let trace = crate::trace::enabled();
+        let trace = crate::core::trace::enabled();
         // 诊断：`NSH_ERIKA_TRACE=1` 时每秒一行 GTK tick 统计（实现在 `trace.rs`）。
         // `add_tick_callback` 收的是 `Fn`，所以要内部可变性。
-        let tick_probe = Rc::new(RefCell::new(crate::trace::GtkTickProbe::from_env()));
+        let tick_probe = Rc::new(RefCell::new(crate::core::trace::GtkTickProbe::from_env()));
         // 基准用：`NSH_ERIKA_EXPORT=1280x720` 固定出帧尺寸，好和别的播放器同尺寸对比。
         let fixed_export = std::env::var("NSH_ERIKA_EXPORT").ok().and_then(|value| {
             let (w, h) = value.split_once('x')?;

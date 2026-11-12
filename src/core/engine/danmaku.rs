@@ -9,7 +9,7 @@
 use erika::danmaku::{DanmakuTimeline, DanmakuTrackSource};
 
 use super::ErikaEngine;
-use crate::cmd::DanmakuCmd;
+use crate::core::cmd::DanmakuCmd;
 
 impl ErikaEngine {
     /// 弹幕命令的总入口。

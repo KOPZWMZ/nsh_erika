@@ -10,7 +10,7 @@
 use erika::subtitle::SubtitleStyleConfig;
 
 use super::ErikaEngine;
-use crate::cmd::SubtitleCmd;
+use crate::core::cmd::SubtitleCmd;
 
 impl ErikaEngine {
     /// 字幕命令的总入口。

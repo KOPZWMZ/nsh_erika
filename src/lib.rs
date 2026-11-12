@@ -34,7 +34,7 @@
 //! ## 分层
 //!
 //! ```text
-//! ┌ 内核层 —— 不认识任何 UI 框架 ────────────────────────────────────────┐
+//! ┌ 内核层 core/ —— 不认识任何 UI 框架（但还没完全平台无关，见「平台」） ─┐
 //! │ engine/     ErikaEngine(actor):PresenterRuntime 的唯一 owner          │
 //! │   engine.rs   结构体 + run 循环 + on_cmd 分派 + 状态发布               │
 //! │   render.rs   on_render + pump_frame：Wake / 出帧 / 保活泵            │
@@ -42,8 +42,9 @@
 //! │ player.rs   ErikaPlayer + ErikaStatus                                │
 //! │ source.rs   ErikaVideoSource + FrameSlot（帧槽 + 视频尺寸）           │
 //! └──────────────────────────────────────────────────────────────────────┘
-//! ┌ 适配层 —— 唯一允许出现 gtk 的地方 ───────────────────────────────────┐
+//! ┌ Linux 适配层 —— 唯一允许出现 gtk 的地方 ─────────────────────────────┐
 //! │ component.rs  ErikaView：`gtk::Picture` + tick 回调 + `source` prop   │
+//! │ linux/frames.rs  FrameBinder：帧源 → `GdkDmabufTexture`                │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -86,6 +87,17 @@
 //! ## 平台
 //!
 //! 目前只有 Linux。macOS / Windows 要各自新写一份导出适配（erika 那边是 Metal / D3D 句柄）。
+//!
+//! 目录已经按「`core/` = 平台无关 / `linux/` = Linux」分过一轮，但**还没干净**。
+//! 还耦合在 core 里的点都打了 `TODO(platform)`，用 `rg 'TODO\(platform\)' src` 一次列全：
+//!
+//! - `core/source.rs`：帧槽装的是 `erika::DmabufFrame`（Linux 专用类型）；
+//! - `core/engine/render.rs`：`pump_frame` 调 `export_frame_dmabuf`（只有 Linux 的 erika 有）；
+//! - `core/trace.rs`：`GtkTickProbe` 是 GTK 专用；
+//! - `component.rs`：实际是 Linux/GTK 适配层，建议和 `linux/frames.rs` 一起挪进 `linux/`。
+//!
+//! 跨平台从这张清单开始拆：先把「决定出不出帧」和「按平台导出」分开，
+//! 再抽象帧载荷（dma-buf / Metal 纹理 / D3D 共享纹理）。
 
 #![warn(missing_docs)]
 
@@ -97,29 +109,25 @@ compile_error!(
      跨平台移植还没做:每个平台要新写一份导出适配（erika 侧是 Metal / D3D 句柄）。"
 );
 
-mod cmd;
-mod engine;
-#[cfg(target_os = "linux")]
-mod frames;
-mod player;
-mod source;
-mod trace;
+mod core;
 
 #[cfg(target_os = "linux")]
 mod component;
 
 #[cfg(target_os = "linux")]
 pub use component::ErikaView;
+#[cfg(target_os = "linux")]
+mod linux;
 
-pub use engine::{ErikaEvent, ErikaEvents};
+pub use core::engine::{ErikaEvent, ErikaEvents};
 pub use erika::PlayerState;
 
-pub use player::{
+pub use core::player::{
     BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuSnapshot,
     DanmakuText, ErikaDanmaku, ErikaPlayer, ErikaStatus, ErikaSubtitle, ErikaTracks, FilterRule,
     SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
 };
-pub use source::{ErikaVideoSource, FrameRequest};
+pub use core::source::{ErikaVideoSource, FrameRequest};
 // 句柄的 `call` / `status` 直接暴露 erika 自己的类型:不另造一层。
 pub use erika::MediaRequest;
 /// 只导出**出现在我们公开签名 / 公开字段里**的上游类型 —— 消费者不依赖 erika。

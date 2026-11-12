@@ -16,18 +16,31 @@
 //!
 //! **只有一条出帧路径**：erika 导出的线性 dma-buf。没有 CPU 回读兜底 —— 宿主
 //! （GTK/GSK）导不进来就没画面（见 `dev_doc/nsh-erika-status.md` §8）。
+//!
+//! ## 平台边界（待整理）
+//!
+//! 帧槽里装的是 [`erika::DmabufFrame`]，这个类型本身是 **Linux 专用**
+//! （`#[cfg(all(target_os = "linux", not(target_env = "ohos")))]`）。
+//! macOS 的导出物是 `CVPixelBuffer`/Metal 纹理、Windows 是 D3D11 共享纹理，都不是 fd。
+//! 跨平台时这一层要先抽象出帧载荷（比如 `enum FrameImage { Dmabuf(..), Metal(..), D3d(..) }`），
+//! 控件再按平台各取各的。
+//!
+//! 所有待拆点用 `rg 'TODO\(platform\)' src` 一次列全。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use crate::cmd::{ErikaCmd, RenderCmd};
+use crate::core::cmd::{ErikaCmd, RenderCmd};
+use crate::core::player::EngineGuard;
 
 /// 帧邮箱：1 格、最后写入者胜。**不通知** —— 渲染层每帧主动拉。
 ///
 /// 为什么不走 actor 的 State/Progress：那两条是 `watch`（通知所有观察者"变了"），
 /// 而帧是**取货**——消费者每帧来拉，从不需要通知。
 pub(crate) struct FrameSlot {
+    // TODO(platform): `erika::DmabufFrame` 只有 Linux 有。跨平台时换成帧载荷抽象
+    // （dma-buf fd / Metal 纹理 / D3D 共享纹理），控件的 `FrameBinder` 按平台取。
     texture: Mutex<Option<Arc<erika::DmabufFrame>>>,
     /// 每写一次 +1。渲染层靠它跳过"同一帧的重复建纹理"。
     generation: AtomicU64,
@@ -148,7 +161,7 @@ pub(crate) struct Slot {
     players: AtomicUsize,
     /// 播放句柄全部 drop 之后置 `false`：控件下一帧自己停。
     alive: AtomicBool,
-    pub(crate) engine: Arc<crate::player::EngineGuard>,
+    pub(crate) engine: Arc<EngineGuard>,
     frames: Arc<FrameSlot>,
     request: Arc<Request>,
 }
@@ -160,7 +173,7 @@ impl Slot {
     }
 
     pub(crate) fn new(
-        engine: Arc<crate::player::EngineGuard>,
+        engine: Arc<EngineGuard>,
         frames: Arc<FrameSlot>,
         request: Arc<Request>,
     ) -> Arc<Self> {

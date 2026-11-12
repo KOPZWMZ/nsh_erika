@@ -1,4 +1,3 @@
 /target
-/liberika
-/examples
-LIBERIKA-PATCHES.md
+/examples/player
+/.cargo
