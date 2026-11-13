@@ -11,7 +11,7 @@ description = "erika 播放内核的 NSH 封装：native component `erika.video`
 nsh-core = "0.5.0"
 log = "0.4"
 serde_json = "1"
-actor-lite = "0.1"
+actor-lite = "0.1.1"
 crossbeam-channel = "0.5"
 
 # liberika 的播放内核（解码 / 同步 / 字幕 / 弹幕 / 音频）。

@@ -5,9 +5,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use erika::MediaRequest;
+use erika::{MediaRequest, PlayerState};
 use nsh_erika::ErikaPlayer;
 
+pub const TEST_MEDIA: &str = "tiny.mp4";
+pub const OTHER_MEDIA: &str = "tiny.mkv";
 pub fn new_player() -> ErikaPlayer {
     ErikaPlayer::new().expect("引擎应该能起来")
 }
@@ -30,12 +32,6 @@ pub struct Session {
     pub player: ErikaPlayer,
     _lock: MutexGuard<'static, ()>,
 }
-impl Drop for Session {
-    fn drop(&mut self) {
-        self.player.stop();
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
 
 impl Session {
     /// 取锁 + 建 player。**先取锁再建**，这样"创建 player"本身也被串行化。
@@ -46,6 +42,18 @@ impl Session {
             _lock: guard,
         }
     }
+}
+pub fn session(lock: &'static Mutex<()>) -> Session {
+    Session::acquire(lock) // ← 唯一提到本文件 LOCK 的地方
+}
+pub fn session_and_opened(name: &str, lock: &'static Mutex<()>) -> Session {
+    let s = session(lock);
+    let before = s.player.generation();
+    s.player.open(media(name));
+    wait(&s.player, |p| p.generation() > before, "open 完成");
+    assert_eq!(s.player.state(), PlayerState::Ready, "前置：应到 Ready");
+    assert!(s.player.duration().is_some(), "前置：应探测出时长");
+    s
 }
 /// 等到条件成立，超时就 panic。
 ///

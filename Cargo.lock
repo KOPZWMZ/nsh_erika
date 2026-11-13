@@ -20,9 +20,9 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
 name = "actor-lite"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb411b6828aa0c1fa84347eca01d6f06432d7e17347c27f6ab3658c35deb1dbe"
+checksum = "2ca2b92bbb40c061c69b79cf4b09293c607209a32d176954ec9d4bc99156f393"
 dependencies = [
  "tokio",
  "tracing",
