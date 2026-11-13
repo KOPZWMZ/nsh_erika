@@ -1,0 +1,38 @@
+name: build
+
+on: [push]
+
+env:
+  CARGO_TERM_COLOR: always
+  # job 跑在临时目录，target 指到固定位置才有增量编译（第二次开始就快了）
+  CARGO_TARGET_DIR: /home/kopdbook/rust_target/cargo
+
+jobs:
+  build:
+    runs-on: self-hosted
+    timeout-minutes: 40
+
+    steps:
+      - name: 1) 检出代码
+        uses: actions/checkout@v4
+
+      - name: 2) 指到本地 liberika
+        run: |
+          set -e
+          LIB=/home/kopdbook/项目/liberika
+          test -d "$LIB" || { echo "本地 liberika 不存在: $LIB"; exit 1; }
+          mkdir -p .cargo
+          printf 'paths = ["%s/crates/erika", "%s/third_party/wgpu-hal"]\n' "$LIB" "$LIB" > .cargo/config.toml
+          cat .cargo/config.toml
+          cargo tree -i erika 2>/dev/null | head -2 || true
+
+      - name: 3) 格式检查
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+
+      - name: 4) 编译
+        run: cargo check --all-targets
+
+      - name: 5) 测试
+        run: cargo test
+
