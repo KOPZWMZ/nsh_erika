@@ -40,15 +40,15 @@ fn wait(player: &ErikaPlayer, cond: impl Fn(&ErikaPlayer) -> bool, what: &str) {
 fn main() {
     let media = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "examples/player/cache/video.mkv".into());
+        .unwrap_or_else(|| "media/tiny.mkv".into());
     // 换片用的小片段(没有就跳过 ⑮⑯):ffmpeg 造一条 8s 的测试片即可
     let other = std::env::args()
         .nth(2)
-        .unwrap_or_else(|| "/tmp/erika_clip_b.mkv".into());
+        .unwrap_or_else(|| "media/tiny.mp4".into());
     // 弹幕测试文件(⑰ 用)
     let danmaku_str = std::env::args()
         .nth(3)
-        .unwrap_or_else(|| "examples/player/cache/danmaku.json".into());
+        .unwrap_or_else(|| "media/tiny.json".into());
     let player = ErikaPlayer::new().expect("引擎起不来");
     // 弹幕句柄从头就用:③ 之前要挂一条轨,验"首次打开不清"这条语义。
     let danmaku = player.danmaku();
@@ -262,13 +262,12 @@ fn main() {
     // 以前这里没有判断,导致 /tmp 被清之后本自检会等 15s 再 panic。
     if std::path::Path::new(&other).exists() {
         println!("⑮ 换片:open(别的文件) —— 不自动播,时长跟着换");
+        let gen_before = player.generation(); // open 前取
         player.open(MediaRequest::new(other.clone()));
-        // 注意:`Opening` 由 erika 自己发布,所以"state == Ready"在换片刚发出时可能还是
-        // **上一部片**的 Ready —— 不能用它当"换完了"的信号。用时长换成短片段来确认。
         wait(
             &player,
-            |p| p.duration().is_some_and(|d| d < Duration::from_secs(60)),
-            "时长已换成短片段",
+            |p| p.generation() > gen_before && p.state() == PlayerState::Ready,
+            "换片完成（generation 已 +1 且回到 Ready）",
         );
         assert!(!player.is_playing(), "换片不该自动播");
         assert_eq!(player.state(), PlayerState::Ready);
