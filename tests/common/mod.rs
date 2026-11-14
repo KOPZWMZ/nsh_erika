@@ -56,7 +56,14 @@ pub fn session_and_opened(name: &str, lock: &'static Mutex<()>) -> Session {
     let s = session(lock);
     let before = s.player.generation();
     s.player.open(media(name));
-    wait(&s.player, |p| p.generation() > before, "open 完成");
+    // ⚠️ 只等 generation 变化是不够的：`generation()` 是**流代次**（open/seek/stop 一起步就 +1），
+    // 会先经过 `Opening` 中间态 —— 机器一忙（刚编完、几个用例并行）就会把中间态当"完成"。
+    // 其余用例一直是 `generation 变化 && Ready` 的写法，这里补齐。
+    wait(
+        &s.player,
+        |p| p.generation() > before && p.state() == PlayerState::Ready,
+        "open 完成",
+    );
     assert_eq!(s.player.state(), PlayerState::Ready, "前置：应到 Ready");
     assert!(s.player.duration().is_some(), "前置：应探测出时长");
     s
