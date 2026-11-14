@@ -282,8 +282,11 @@ impl ErikaVideoSource {
         self.slot.frames.has_frame()
     }
 
-    /// 渲染层专用：一次拿到「代号 + 帧」。代号没变 = 没有新帧。
-    pub(crate) fn frame_snapshot(&self) -> (u64, Option<Arc<erika::DmabufFrame>>) {
+    /// 一次拿到「代号 + 帧」。代号没变 = 没有新帧。
+    ///
+    /// 渲染层每帧调它（`erika.video` 控件的 `FrameBinder`），出帧测试也用它 ——
+    /// 这是 `FrameSlot` 唯一的读口，控件以外没人能验证"像素真的出来了"。
+    pub fn frame_snapshot(&self) -> (u64, Option<Arc<erika::DmabufFrame>>) {
         self.slot.frames.current()
     }
 }

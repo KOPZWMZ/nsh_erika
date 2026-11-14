@@ -2475,6 +2475,7 @@ dependencies = [
  "actor-lite",
  "crossbeam-channel",
  "erika",
+ "libc",
  "log",
  "nsh-core",
  "nsh-platform-linux",

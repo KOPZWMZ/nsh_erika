@@ -134,8 +134,11 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// 依赖 actor-lite ≥ 0.1.1:`is_alive() == false` 由 `AliveGuard` 在 actor 字段
 /// 析构完之后才发出。0.1.0 的语义会早一个窗口,拿它做退出判断就会与后台线程的
-/// `free()` 赛跑 → glibc 堆损坏 + SIGABRT(见 actor-lite CHANGELOG 0.1.1,
-/// 以及 `tests/engine_shutdown.rs`)。
+/// `free()` 赛跑 → glibc 堆损坏 + SIGABRT(见 actor-lite CHANGELOG 0.1.1)。
+///
+/// 这条语义的**精确契约**由 actor-lite 自己的 `tests/is_alive_semantics.rs` 钉住,
+/// 这里不重复钉:端到端那层只能靠 `/proc/*/comm` 匹配线程名,在没有 GPU 的环境里会被
+/// Mesa 软件光栅的无名线程误伤(实测 2026-11-14),已删。
 ///
 /// 超时后**放弃等待**并记一条 warn:不能把宿主的退出流程挂死(关闭窗口卡 5 秒以上
 /// 比崩溃还难查),但也不能静默 —— 这条日志是"退出时又和后台赛跑"的第一线索。

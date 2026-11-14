@@ -12,6 +12,10 @@
 #   bash scripts/test-integration.sh --list         # 只打印清单 + 漂移检查
 #   bash scripts/test-integration.sh --release      # 其余参数原样传给 cargo test
 #
+# 装了 Mesa 的软件 Vulkan（Arch：`vulkan-swrast`）时，`frame_output` 会**再跑一遍**只指向
+# lavapipe 的版本：RADV 不允许 mmap dma-buf，像素级断言（不是纯黑 / 画面在动）只有软件
+# Vulkan 那条过得去。找不到 lavapipe 的 ICD 就跳过这一遍，不影响结果。
+#
 # 每个用例的完整输出写在 `$CARGO_TARGET_DIR/integration-logs/<名字>.log`：
 # 成功只打一行 + 耗时，失败打末尾 60 行。
 set -euo pipefail
@@ -24,7 +28,8 @@ TESTS=(
   engine_state
   engine_open
   engine_playback
-  engine_shutdown
+  # 出帧路径（需要能导出 dma-buf 的 Vulkan 设备；没有时打 SKIP 不算失败）
+  frame_output
 )
 
 keep_going=0
@@ -95,6 +100,42 @@ for name in "${TESTS[@]}"; do
     [ "$keep_going" -eq 1 ] || break
   fi
 done
+
+# ── 软件 Vulkan 复跑：像素级断言只有这一遍能过 ─────────────────────────────
+# 用 loader 层只暴露 lavapipe（`VK_ICD_FILENAMES`），再配 `WGPU_BACKEND=vulkan` 防止
+# erika 退到 GL 就收工（GL 也算"硬件"，会挡住软件 Vulkan 候选）。
+run_lavapipe() {
+  local icd
+  icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -1)
+  if [ -z "$icd" ]; then
+    printf '==> frame_output@lavapipe\n    跳过：没找到 lavapipe 的 ICD（Arch 装 vulkan-swrast）\n'
+    return 0
+  fi
+  local log="$logs/frame_output-lavapipe.log"
+  printf '==> frame_output@lavapipe（ICD %s）\n' "$icd"
+  local started
+  started=$(now_ms)
+  if WGPU_BACKEND=vulkan VK_ICD_FILENAMES="$icd" \
+    cargo test --test frame_output ${cargo_args[@]+"${cargo_args[@]}"} >"$log" 2>&1; then
+    local elapsed summary
+    elapsed=$(($(now_ms) - started))
+    summary=$(grep -E '^test result:' "$log" | tail -1)
+    results+=("PASS  frame_output@lavapipe  ${elapsed}ms  ${summary#test result: }")
+    printf '    PASS (%d ms) %s\n' "$elapsed" "$summary"
+  else
+    local elapsed
+    elapsed=$(($(now_ms) - started))
+    results+=("FAIL  frame_output@lavapipe  ${elapsed}ms  日志：$log")
+    printf '    FAIL (%d ms)，日志末尾：\n' "$elapsed" >&2
+    tail -60 "$log" >&2
+    failed+=("frame_output@lavapipe")
+  fi
+}
+
+# 前面的用例全绿才值得再跑一遍软件 Vulkan（它只是加强断言，不是独立需求）。
+if [ "${#failed[@]}" -eq 0 ]; then
+  run_lavapipe
+fi
 
 # ── 汇总 ─────────────────────────────────────────────────────────────────
 printf '\n---- 集成测试汇总 ----\n'

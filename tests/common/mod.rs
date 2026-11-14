@@ -9,6 +9,12 @@ use erika::{MediaRequest, PlayerState};
 use nsh_erika::ErikaPlayer;
 
 pub const TEST_MEDIA: &str = "tiny.mp4";
+/// 只有视频轨、没有音频（h264 64x64 / 20 帧 / 2 秒）。
+///
+/// 出帧测试用它：那条链只关心"解码 → 合成 → 导出"，音频设备在无头环境 / 容器里
+/// 是白噪声（PulseAudio 缺失、`pendingAudioFrame` 之类的收尾日志都会干扰），
+/// 而播放时钟没有音轨时由墙钟推进，更可控。
+pub const SILENT_MEDIA: &str = "silent.mp4";
 pub const OTHER_MEDIA: &str = "tiny.mkv";
 pub fn new_player() -> ErikaPlayer {
     ErikaPlayer::new().expect("引擎应该能起来")
