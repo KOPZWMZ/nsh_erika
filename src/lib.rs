@@ -112,13 +112,11 @@ compile_error!(
 mod core;
 
 #[cfg(target_os = "linux")]
-mod component;
-
-#[cfg(target_os = "linux")]
-pub use component::ErikaView;
+pub use linux::native_view::ErikaView;
 #[cfg(target_os = "linux")]
 mod linux;
-
+#[cfg(target_os = "windows")]
+mod windows;
 pub use core::engine::{ErikaEvent, ErikaEvents};
 pub use erika::PlayerState;
 
@@ -148,7 +146,7 @@ pub const COMPONENT_NAME: &str = "erika.video";
 /// 去那里找固定名字的入口，不能写在这个库里面。
 #[cfg(target_os = "linux")]
 pub fn register(components: &nsh_platform_linux::Components) {
-    components.register(COMPONENT_NAME, component::factory());
+    components.register(COMPONENT_NAME, linux::native_view::factory());
 }
 
 /// 把帧源显示到页面里：`view().child(nsh_erika::video(&source))`。
