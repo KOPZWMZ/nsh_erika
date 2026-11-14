@@ -770,8 +770,8 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
 name = "erika"
-version = "0.3.6"
-source = "git+https://github.com/AimesSoft/liberika?tag=v0.3.6#e38a511561cb30ca57bd370b944d2e99b12737c7"
+version = "0.3.7"
+source = "git+https://github.com/AimesSoft/liberika?tag=v0.3.7#a4f829999fe8df0c35561fe1bdf0f5ad0df0c3a5"
 dependencies = [
  "ab_glyph",
  "ab_glyph_rasterizer",
@@ -818,8 +818,8 @@ dependencies = [
 
 [[package]]
 name = "erika_ffmpeg_sys"
-version = "0.3.6"
-source = "git+https://github.com/AimesSoft/liberika?tag=v0.3.6#e38a511561cb30ca57bd370b944d2e99b12737c7"
+version = "0.3.7"
+source = "git+https://github.com/AimesSoft/liberika?tag=v0.3.7#a4f829999fe8df0c35561fe1bdf0f5ad0df0c3a5"
 dependencies = [
  "bindgen 0.72.1",
  "libc",
@@ -828,8 +828,8 @@ dependencies = [
 
 [[package]]
 name = "erika_plugin"
-version = "0.3.6"
-source = "git+https://github.com/AimesSoft/liberika?tag=v0.3.6#e38a511561cb30ca57bd370b944d2e99b12737c7"
+version = "0.3.7"
+source = "git+https://github.com/AimesSoft/liberika?tag=v0.3.7#a4f829999fe8df0c35561fe1bdf0f5ad0df0c3a5"
 dependencies = [
  "regex",
  "serde",

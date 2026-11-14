@@ -1,3 +1,4 @@
 /target
 /examples/player
 /.cargo
+/.vendor

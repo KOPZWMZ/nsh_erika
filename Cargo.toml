@@ -17,9 +17,11 @@ crossbeam-channel = "0.5"
 # liberika 的播放内核（解码 / 同步 / 字幕 / 弹幕 / 音频）。
 # 默认 feature（libass 字幕、内嵌 fallback 字体、ArtCNN）必须留着；
 # `default-features = false` 会把 wgpu 渲染后端一起关掉，--features wgpu 是 L2 的前提。
-# 注意：本 crate 用到了 v0.3.6 之后的 API（DmabufFrame、export_frame_dmabuf），
-# 所以引用自己的 fork 分支，而不是上游的 v0.3.6 tag。
-erika = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.6", features = [
+# v0.3.7（2026-11-13）起这些改动都进了上游 tag：DmabufFrame / export_frame_dmabuf、
+# VA-API 直通（去掉 AV_HWFRAME_MAP_DIRECT），不再需要本地 fork 分支。
+# ⚠️ 但 Linux 编译还差两块上游没发出来的东西，见 `.cargo/config.toml` 与 `.vendor/`：
+# 打补丁的 wgpu-hal（`set_external_initial_usage`）和补丁版 libass（build.rs 要它）。
+erika = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7", features = [
     "wgpu",
 ] }
 
