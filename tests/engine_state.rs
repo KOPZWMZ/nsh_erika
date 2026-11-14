@@ -16,15 +16,11 @@ mod common;
 use common::*;
 /// 每个用例都会建一个 `ErikaPlayer`（内部会起引擎线程、建渲染资源）。
 /// 并行跑会互相抢资源、日志也会串在一起，所以这里**串行化**。
-/// 用 `cargo test --test state -- --test-threads=1` 也能达到同样效果，
-/// 但放在代码里更可靠（别人不会忘记加参数）。
 static LOCK: Mutex<()> = Mutex::new(());
-fn session() -> Session {
-    Session::acquire(&LOCK) // ← 唯一提到本文件 LOCK 的地方
-}
+
 #[test]
 fn new_player_starts_idle() {
-    let s = session();
+    let s = session(&LOCK);
 
     assert_eq!(s.player.state(), PlayerState::Idle);
     assert!(!s.player.has_media(), "刚开始不该有媒体");
@@ -34,7 +30,7 @@ fn new_player_starts_idle() {
 
 #[test]
 fn play_without_media_reports_error_but_keeps_state_clean() {
-    let s = session();
+    let s = session(&LOCK);
 
     // 没有媒体就播 —— 这正是"用户手滑点了播放"的场景：
     // 不该 panic（UI 会崩），但错误必须能被 UI 读到。
@@ -57,7 +53,7 @@ fn play_without_media_reports_error_but_keeps_state_clean() {
 
 #[test]
 fn seek_stop_pause_without_media_are_noops() {
-    let s = session();
+    let s = session(&LOCK);
 
     // 这四种操作在"没有媒体"时都必须是安全的 no-op ——
     // 它们都可能被 UI 在任意时刻触发（比如组件卸载、快捷键）。

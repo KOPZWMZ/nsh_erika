@@ -13,37 +13,27 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - name: 1) 检出代码
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 2) 指到本地 liberika
-        run: |
-          set -e
-          LIB=/home/kopdbook/项目/liberika
-          test -d "$LIB" || { echo "本地 liberika 不存在: $LIB"; exit 1; }
-          mkdir -p .cargo
-          printf 'paths = ["%s/crates/erika", "%s/third_party/wgpu-hal"]\n' "$LIB" "$LIB" > .cargo/config.toml
-          cat .cargo/config.toml
-          cargo tree -i erika 2>/dev/null | head -2 || true
+      # erika v0.3.7 的外部消费者缺两个上游前置（补丁版 libass + 仓内 wgpu-hal），
+      # 由脚本从 cargo 的 liberika checkout 里取出来放进 gitignore 的 .vendor/。
+      - name: 准备 Linux 构建前置
+        run: bash scripts/prepare-linux-deps.sh
 
-      - name: 3) 格式检查
+      - name: 格式检查
         run: cargo fmt --all -- --check
         continue-on-error: true
 
-      - name: 4) 编译体检（不跑，最快发现编译错误）
+      - name: 编译体检
         run: cargo test --no-run
 
-      - name: 5) 单元测试（毫秒级，硬失败）
+      - name: 单元测试（毫秒级，硬失败）
         run: cargo test --lib
 
-      - name: 6) 文档测试（硬失败）
+      - name: 文档测试（硬失败）
         run: cargo test --doc
 
-      - name: 7) 集成测试 - 状态机（稳定，硬失败）
-        run: cargo test --test engine_state
-
-      - name: 8) 集成测试 - open（偶发堆损坏，观察期）
-        run: cargo test --test engine_open
-        continue-on-error: true
-        # TODO 定位 SIGABRT on exit 后去掉
-
+      # 集成测试的清单在脚本里的 TESTS 数组：加新用例改那一处即可。
+      - name: 集成测试（硬失败）
+        run: bash scripts/test-integration.sh

@@ -97,18 +97,16 @@ pub use subtitle::{
     ErikaSubtitle, SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
 };
 pub use tracks::ErikaTracks;
-/// 等引擎线程退出的轮询间隔 / 上限。
-///
-/// 退出时要销毁的东西不少(Vulkan 设备、解码器、libass、字体),但都是"释放内存"级的工作,
-/// 一秒够用;真要卡住就不等了(不能把宿主退出流程挂死)。
-const SHUTDOWN_POLL: Duration = Duration::from_millis(5);
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// 引擎线程的"最后一位守卫":**最后一个句柄 drop 时**,它负责停下来并等引擎退干净。
 ///
 /// 没有它的话,`drop(player)` 只是关掉命令通道就立刻返回,引擎线程还在
 /// `PresenterRuntime` 的析构里 free 一堆东西 —— 主线程这时候可能已经在跑
 /// `main` 的收尾甚至进程退出,两者赛跑就是堆损坏。
+///
+/// **正确性依赖 actor-lite ≥ 0.1.1 的 `is_alive()` 语义**(见 [`shutdown_engine`])。
+/// 0.1.0 里它在 `run()` 返回时就发 false,比 actor 字段的析构早一个窗口 ——
+/// 那正是我们踩过的偶发 SIGABRT / 堆损坏。
 pub(crate) struct EngineGuard {
     pub(crate) handle: ActorHandle<ErikaEngine>,
 }
@@ -119,12 +117,39 @@ impl Drop for EngineGuard {
     }
 }
 
-/// `stop()` 之后轮询到线程真的退出(或超时)。
+/// 等引擎退干净时的轮询间隔。
+const SHUTDOWN_POLL: Duration = Duration::from_millis(5);
+
+/// 等引擎退干净的上限。
+///
+/// 正常退出(Vulkan 设备 + 解码器 + libass + 字体库全销毁)是几十到几百毫秒,
+/// 5 秒是"确定卡死"的判据,不是性能预算 —— 给足余量,别把"慢"误判成"卡"。
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `stop()` 之后轮询到**引擎线程及其资源真的释放完**(或超时)。
+///
+/// 这里等的不是"`run()` 返回",而是"actor 的字段已经析构完" ——
+/// `PresenterRuntime`(Vulkan 设备 / 解码器 / libass / 字体库)的 drop 发生在
+/// `run()` 返回**之后**,而那段时间才是退出耗时的大头。
+///
+/// 依赖 actor-lite ≥ 0.1.1:`is_alive() == false` 由 `AliveGuard` 在 actor 字段
+/// 析构完之后才发出。0.1.0 的语义会早一个窗口,拿它做退出判断就会与后台线程的
+/// `free()` 赛跑 → glibc 堆损坏 + SIGABRT(见 actor-lite CHANGELOG 0.1.1,
+/// 以及 `tests/engine_shutdown.rs`)。
+///
+/// 超时后**放弃等待**并记一条 warn:不能把宿主的退出流程挂死(关闭窗口卡 5 秒以上
+/// 比崩溃还难查),但也不能静默 —— 这条日志是"退出时又和后台赛跑"的第一线索。
 fn shutdown_engine(handle: &ActorHandle<ErikaEngine>) {
     handle.stop();
     let deadline = std::time::Instant::now() + SHUTDOWN_TIMEOUT;
     while handle.is_alive() && std::time::Instant::now() < deadline {
         std::thread::sleep(SHUTDOWN_POLL);
+    }
+    if handle.is_alive() {
+        log::warn!(
+            "erika: 引擎线程 {}ms 内未退干净，放弃等待（进程退出时可能与后台释放赛跑）",
+            SHUTDOWN_TIMEOUT.as_millis()
+        );
     }
 }
 
