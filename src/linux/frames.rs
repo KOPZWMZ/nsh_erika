@@ -13,7 +13,8 @@ use std::time::Instant;
 use gtk::prelude::*;
 use nsh_platform_linux::gtk4 as gtk;
 
-use crate::{ErikaVideoSource, FrameRequest};
+use crate::core::source::export_size;
+use crate::{ErikaVideoSource, FrameImage, FrameRequest};
 
 /// `DRM_FORMAT_ABGR8888`（内存里是 R,G,B,A，对应 erika 的 R8G8B8A8_UNORM）。
 const FOURCC_ABGR8888: u32 = 0x3432_4241;
@@ -57,7 +58,7 @@ impl FrameBinder {
         let trace = crate::core::trace::enabled();
         // 诊断：`NSH_ERIKA_TRACE=1` 时每秒一行 GTK tick 统计（实现在 `trace.rs`）。
         // `add_tick_callback` 收的是 `Fn`，所以要内部可变性。
-        let tick_probe = Rc::new(RefCell::new(crate::core::trace::GtkTickProbe::from_env()));
+        let tick_probe = Rc::new(RefCell::new(crate::core::trace::TickProbe::from_env()));
         // 基准用：`NSH_ERIKA_EXPORT=1280x720` 固定出帧尺寸，好和别的播放器同尺寸对比。
         let fixed_export = std::env::var("NSH_ERIKA_EXPORT").ok().and_then(|value| {
             let (w, h) = value.split_once('x')?;
@@ -92,7 +93,7 @@ impl FrameBinder {
                 scale,
             });
 
-            let (generation, frame) = source.frame_snapshot();
+            let (generation, image) = source.frame_snapshot();
             let count = ticks.get() + 1;
             ticks.set(count);
             // 诊断：`NSH_ERIKA_TRACE=1` 时每 2 秒打一行状态。
@@ -108,12 +109,13 @@ impl FrameBinder {
             }
             let mut swapped = false;
             if generation != painted.get() {
-                match frame {
-                    Some(frame) => match texture_for(&frame) {
+                match image {
+                    Some(image) => match texture_for(&image) {
                         Some(texture) => {
                             swapped = true;
                             if !first.get() {
                                 first.set(true);
+                                if let Some(frame) = image.as_dmabuf(){
                                 log::info!(
                                     "erika.video: 第一帧 dma-buf {}x{} stride={} offset={}",
                                     frame.width(),
@@ -121,6 +123,7 @@ impl FrameBinder {
                                     frame.stride(),
                                     frame.offset(),
                                 );
+                                }
                             }
                             picture.set_paintable(Some(&texture));
                         }
@@ -169,26 +172,10 @@ impl FrameBinder {
     }
 }
 
-/// 视频宽高比在控件里的内接矩形，单位是物理像素。
-///
-/// 宽高比还不知道时（轨道还没 probe 出来）先用整块控件，出第一帧之后再收窄。
-fn export_size(aspect: Option<f32>, width: u32, height: u32) -> (u32, u32) {
-    let Some(aspect) = aspect.filter(|aspect| aspect.is_finite() && *aspect > 0.0) else {
-        return (width, height);
-    };
-    // 控件比视频宽 → 高度顶满、左右留边；否则宽度顶满、上下留边。
-    if width as f32 / height as f32 > aspect {
-        let width = ((height as f32) * aspect).round() as u32;
-        (width.max(1), height)
-    } else {
-        let height = ((width as f32) / aspect).round() as u32;
-        (width, height.max(1))
-    }
-}
-
 /// 把引擎给的 dma-buf 帧变成 GTK 能贴的纹理。
-fn texture_for(frame: &erika::DmabufFrame) -> Option<gtk::gdk::Texture> {
+fn texture_for(image: &FrameImage) -> Option<gtk::gdk::Texture> {
     // 交给 GDK 一份自己的 fd：它会在 release 回调里关掉，引擎那份不受影响。
+    let frame = image.as_dmabuf()?;
     let owned = match frame.try_clone_fd() {
         Ok(fd) => fd,
         Err(error) => {

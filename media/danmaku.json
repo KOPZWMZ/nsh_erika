@@ -1,0 +1,1784 @@
+[
+ {
+  "time": 1.0,
+  "content": "这里我哭了",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 1.82,
+  "content": "名场面打卡",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 2.67,
+  "content": "我去，这镜头 #3",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 3.0,
+  "content": "我是 UP 主本人的弹幕",
+  "type": "top",
+  "color": "#FF6600",
+  "is_me": true,
+  "id": "9007199254740993"
+ },
+ {
+  "time": 3.84,
+  "content": "这就是经费在燃烧",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 4.47,
+  "content": "第一次看，好紧张 #5",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 0.9
+ },
+ {
+  "time": 5.4,
+  "content": "弹幕护体 #6",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "t": 5.5,
+  "c": "别名写法测试(c/t/mode 数字)",
+  "mode": 5,
+  "color": 16777215
+ },
+ {
+  "time": 6.33,
+  "content": "这段配乐绝了",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 32,
+  "opacity": 0.7
+ },
+ {
+  "time": 7.4,
+  "content": "已截图做壁纸",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 8.47,
+  "content": "我去，这镜头 #9",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 9.25,
+  "content": "这段配乐绝了 #10",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 10.41,
+  "content": "背景音乐是什么 #11",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 0.9
+ },
+ {
+  "time": 11.21,
+  "content": "导演加鸡腿",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 12.38,
+  "content": "啊这……",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 13.15,
+  "content": "这特效是实拍吗",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 13.85,
+  "content": "哈哈哈哈哈哈",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 14.69,
+  "content": "啊这…… #16",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 40,
+  "opacity": 0.9
+ },
+ {
+  "time": 15.82,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 16.99,
+  "content": "第一次看，好紧张 #18",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 17.88,
+  "content": "这就是经费在燃烧 #19",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 18.8,
+  "content": "好家伙",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.7
+ },
+ {
+  "time": 19.64,
+  "content": "这特效是实拍吗 #21",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 20.28,
+  "content": "此处应有掌声",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 22.49,
+  "content": "这就是经费在燃烧 #23",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 24.63,
+  "content": "此处应有掌声",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 27.58,
+  "content": "哈哈哈哈哈哈",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 29.75,
+  "content": "哈哈哈哈哈哈",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 32.78,
+  "content": "此处应有掌声",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 36.3,
+  "content": "字幕组辛苦了",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 40.12,
+  "content": "导演加鸡腿",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 43.73,
+  "content": "这特效是实拍吗",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 46.44,
+  "content": "前方高能预警",
+  "type": "top",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 48.83,
+  "content": "好家伙",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 51.27,
+  "content": "我去，这镜头",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 54.23,
+  "content": "导演加鸡腿",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 57.18,
+  "content": "弹幕护体",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 60.11,
+  "content": "这段配乐绝了",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 63.29,
+  "content": "已截图做壁纸",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 66.39,
+  "content": "第一次看，好紧张 #38",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 69.25,
+  "content": "此处应有掌声",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 71.84,
+  "content": "我去，这镜头",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 75.51,
+  "content": "名场面打卡",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 79.16,
+  "content": "细节拉满 #42",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 82.38,
+  "content": "第一次看，好紧张 #43",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 85.03,
+  "content": "细节拉满",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 87.53,
+  "content": "循环第 3 遍 #45",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 91.05,
+  "content": "这段配乐绝了",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 94.07,
+  "content": "啊这……",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 97.75,
+  "content": "第一次看，好紧张",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 101.09,
+  "content": "背景音乐是什么 #49",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 104.97,
+  "content": "导演加鸡腿 #50",
+  "type": "bottom",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 108.46,
+  "content": "哈哈哈哈哈哈 #51",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 111.87,
+  "content": "细节拉满",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 114.06,
+  "content": "导演加鸡腿 #53",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 116.83,
+  "content": "细节拉满",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 120.77,
+  "content": "哈哈哈哈哈哈 #55",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 124.28,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 127.35,
+  "content": "细节拉满",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 129.47,
+  "content": "弹幕护体",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 133.07,
+  "content": "这段配乐绝了",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 135.98,
+  "content": "这里我哭了",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 138.07,
+  "content": "我去，这镜头",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 140.47,
+  "content": "字幕组辛苦了",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 143.47,
+  "content": "弹幕护体 #63",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 145.5,
+  "content": "细节拉满",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 147.71,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 40,
+  "opacity": 0.9
+ },
+ {
+  "time": 151.09,
+  "content": "我去，这镜头 #66",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 155.05,
+  "content": "第一次看，好紧张 #67",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 157.16,
+  "content": "这特效是实拍吗",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 160.55,
+  "content": "名场面打卡",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 163.08,
+  "content": "这里我哭了",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 167.01,
+  "content": "字幕组辛苦了 #71",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 169.17,
+  "content": "循环第 3 遍",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 171.36,
+  "content": "这段配乐绝了 #73",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 173.96,
+  "content": "我去，这镜头 #74",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 177.48,
+  "content": "啊这…… #75",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 180.95,
+  "content": "细节拉满 #76",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 183.12,
+  "content": "名场面打卡 #77",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.7
+ },
+ {
+  "time": 186.24,
+  "content": "前方高能预警",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 188.25,
+  "content": "这段配乐绝了",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 191.74,
+  "content": "啊这…… #80",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 194.2,
+  "content": "已截图做壁纸",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 197.73,
+  "content": "好家伙",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 200.4,
+  "content": "字幕组辛苦了",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 203.37,
+  "content": "哈哈哈哈哈哈",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 206.3,
+  "content": "已截图做壁纸",
+  "type": "bottom",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 210.17,
+  "content": "前方高能预警 #86",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 212.59,
+  "content": "此处应有掌声 #87",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 0.9
+ },
+ {
+  "time": 216.49,
+  "content": "第一次看，好紧张",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 218.96,
+  "content": "啊这…… #89",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.7
+ },
+ {
+  "time": 221.77,
+  "content": "第一次看，好紧张",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 223.77,
+  "content": "这里我哭了",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 226.28,
+  "content": "这段配乐绝了 #92",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 229.79,
+  "content": "名场面打卡 #93",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 233.73,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 237.36,
+  "content": "这特效是实拍吗",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 241.22,
+  "content": "背景音乐是什么",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 243.32,
+  "content": "每次看到这里都要暂停 #97",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 245.92,
+  "content": "循环第 3 遍",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 0.7
+ },
+ {
+  "time": 248.16,
+  "content": "弹幕护体 #99",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 251.06,
+  "content": "这里我哭了",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 253.55,
+  "content": "弹幕护体 #101",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 256.07,
+  "content": "这就是经费在燃烧 #102",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 32,
+  "opacity": 0.7
+ },
+ {
+  "time": 259.56,
+  "content": "此处应有掌声 #103",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 262.71,
+  "content": "导演加鸡腿 #104",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 266.5,
+  "content": "这特效是实拍吗 #105",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 268.75,
+  "content": "背景音乐是什么",
+  "type": "bottom",
+  "color": 16777215,
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 270.75,
+  "content": "这特效是实拍吗",
+  "type": "bottom",
+  "color": 16777215,
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 274.32,
+  "content": "我去，这镜头 #108",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 277.42,
+  "content": "名场面打卡 #109",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 280.71,
+  "content": "字幕组辛苦了",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 284.11,
+  "content": "哈哈哈哈哈哈 #111",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 286.56,
+  "content": "好家伙 #112",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 290.48,
+  "content": "我去，这镜头",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 293.89,
+  "content": "字幕组辛苦了 #114",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 296.4,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 299.84,
+  "content": "导演加鸡腿",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 302.25,
+  "content": "此处应有掌声 #117",
+  "type": "top",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 304.69,
+  "content": "字幕组辛苦了 #118",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 308.48,
+  "content": "啊这……",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 312.33,
+  "content": "名场面打卡 #120",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 315.75,
+  "content": "弹幕护体 #121",
+  "type": "bottom",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 319.61,
+  "content": "这里我哭了 #122",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 322.94,
+  "content": "这特效是实拍吗",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 324.95,
+  "content": "循环第 3 遍 #124",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 327.71,
+  "content": "字幕组辛苦了",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 330.1,
+  "content": "每次看到这里都要暂停",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 332.16,
+  "content": "背景音乐是什么 #127",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 334.23,
+  "content": "这段配乐绝了",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 338.02,
+  "content": "这里我哭了 #129",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 341.87,
+  "content": "字幕组辛苦了 #130",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 344.09,
+  "content": "已截图做壁纸",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 0.7
+ },
+ {
+  "time": 346.35,
+  "content": "啊这…… #132",
+  "type": "top",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 349.01,
+  "content": "这里我哭了",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 351.79,
+  "content": "弹幕护体 #134",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 354.11,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 356.53,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 358.8,
+  "content": "已截图做壁纸",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 362.36,
+  "content": "字幕组辛苦了 #138",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 365.83,
+  "content": "此处应有掌声",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 368.39,
+  "content": "这就是经费在燃烧 #140",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 371.41,
+  "content": "我去，这镜头",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 373.42,
+  "content": "我去，这镜头",
+  "type": "bottom",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 375.88,
+  "content": "名场面打卡 #143",
+  "type": "top",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 378.91,
+  "content": "弹幕护体",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 381.34,
+  "content": "导演加鸡腿 #145",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 384.54,
+  "content": "此处应有掌声",
+  "type": "top",
+  "color": "#66CCFF",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 386.91,
+  "content": "字幕组辛苦了 #147",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 389.04,
+  "content": "哈哈哈哈哈哈",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 392.35,
+  "content": "这特效是实拍吗",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 396.25,
+  "content": "字幕组辛苦了",
+  "type": "bottom",
+  "color": "#66CCFF",
+  "font_size": 32,
+  "opacity": 0.7
+ },
+ {
+  "time": 398.29,
+  "content": "导演加鸡腿",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 401.16,
+  "content": "弹幕护体",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 404.08,
+  "content": "弹幕护体 #153",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 407.22,
+  "content": "导演加鸡腿",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 409.55,
+  "content": "弹幕护体",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 412.15,
+  "content": "名场面打卡",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 414.32,
+  "content": "好家伙",
+  "type": "bottom",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 417.55,
+  "content": "此处应有掌声",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 421.43,
+  "content": "弹幕护体 #159",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 423.51,
+  "content": "每次看到这里都要暂停",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 426.29,
+  "content": "已截图做壁纸",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 429.46,
+  "content": "背景音乐是什么 #162",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 431.82,
+  "content": "前方高能预警",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 435.34,
+  "content": "已截图做壁纸",
+  "type": "top",
+  "color": 16777215,
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 437.48,
+  "content": "导演加鸡腿",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 439.56,
+  "content": "第一次看，好紧张 #166",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 441.67,
+  "content": "细节拉满",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 445.66,
+  "content": "哈哈哈哈哈哈 #168",
+  "type": "bottom",
+  "color": 16777215,
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 449.03,
+  "content": "我去，这镜头 #169",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 452.82,
+  "content": "循环第 3 遍",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 455.24,
+  "content": "循环第 3 遍",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 457.64,
+  "content": "这特效是实拍吗 #172",
+  "type": "bottom",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 459.98,
+  "content": "循环第 3 遍 #173",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 463.09,
+  "content": "这就是经费在燃烧",
+  "type": "bottom",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 466.56,
+  "content": "导演加鸡腿 #175",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 470.09,
+  "content": "已截图做壁纸 #176",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 472.71,
+  "content": "这就是经费在燃烧",
+  "type": "bottom",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 475.15,
+  "content": "字幕组辛苦了",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 40,
+  "opacity": 0.9
+ },
+ {
+  "time": 478.95,
+  "content": "第一次看，好紧张",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 480.95,
+  "content": "导演加鸡腿 #180",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 483.78,
+  "content": "字幕组辛苦了",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 486.09,
+  "content": "前方高能预警",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 488.22,
+  "content": "第一次看，好紧张",
+  "type": "top",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 492.16,
+  "content": "名场面打卡",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 40,
+  "opacity": 0.7
+ },
+ {
+  "time": 495.36,
+  "content": "细节拉满",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 497.48,
+  "content": "前方高能预警",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 499.51,
+  "content": "每次看到这里都要暂停",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 502.54,
+  "content": "细节拉满",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 0.9
+ },
+ {
+  "time": 504.67,
+  "content": "名场面打卡",
+  "type": "scroll",
+  "color": 16777215,
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 507.42,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 509.87,
+  "content": "哈哈哈哈哈哈 #191",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 513.66,
+  "content": "循环第 3 遍",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 40,
+  "opacity": 0.9
+ },
+ {
+  "time": 516.25,
+  "content": "此处应有掌声 #193",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 520.06,
+  "content": "此处应有掌声",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 522.71,
+  "content": "我去，这镜头 #195",
+  "type": "top",
+  "color": 16777215,
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 526.43,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 529.67,
+  "content": "这段配乐绝了",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 531.9,
+  "content": "好家伙",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 533.98,
+  "content": "名场面打卡",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 536.38,
+  "content": "每次看到这里都要暂停",
+  "type": "scroll",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 538.79,
+  "content": "哈哈哈哈哈哈 #201",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 540.99,
+  "content": "哈哈哈哈哈哈",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 543.66,
+  "content": "循环第 3 遍 #203",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 547.49,
+  "content": "好家伙",
+  "type": "top",
+  "color": "#00FF00",
+  "font_size": 40,
+  "opacity": 1.0
+ },
+ {
+  "time": 551.06,
+  "content": "前方高能预警",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 554.47,
+  "content": "每次看到这里都要暂停",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 40,
+  "opacity": 0.9
+ },
+ {
+  "time": 556.81,
+  "content": "前方高能预警",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 559.8,
+  "content": "啊这……",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 563.71,
+  "content": "细节拉满 #209",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 566.71,
+  "content": "哈哈哈哈哈哈",
+  "type": "top",
+  "color": "#FFFFFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 569.96,
+  "content": "导演加鸡腿 #211",
+  "type": "bottom",
+  "color": "#FFD700",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 573.74,
+  "content": "前方高能预警 #212",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 576.5,
+  "content": "我去，这镜头",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.9
+ },
+ {
+  "time": 579.54,
+  "content": "已截图做壁纸",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 582.42,
+  "content": "循环第 3 遍",
+  "type": "scroll",
+  "color": "#66CCFF",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 585.43,
+  "content": "循环第 3 遍 #216",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 588.88,
+  "content": "好家伙",
+  "type": "scroll",
+  "color": "#FF0000",
+  "font_size": 25,
+  "opacity": 1.0
+ },
+ {
+  "time": 591.4,
+  "content": "哈哈哈哈哈哈 #218",
+  "type": "scroll",
+  "color": "#FFFFFF",
+  "font_size": 25,
+  "opacity": 0.7
+ },
+ {
+  "time": 593.7,
+  "content": "第一次看，好紧张",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 0.9
+ },
+ {
+  "time": 596.09,
+  "content": "哈哈哈哈哈哈 #220",
+  "type": "bottom",
+  "color": "#FFD700",
+  "font_size": 32,
+  "opacity": 1.0
+ },
+ {
+  "time": 598.12,
+  "content": "背景音乐是什么",
+  "type": "scroll",
+  "color": "#00FF00",
+  "font_size": 32,
+  "opacity": 1.0
+ }
+]

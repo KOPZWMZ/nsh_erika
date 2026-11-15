@@ -14,16 +14,21 @@
 //! 页面函数返回后 `ErikaVideoSource` 这个局部值就 drop 了，而控件的 prop 要到挂载时才送到），
 //! 由播放句柄负责摘除 —— 最后一个 [`ErikaPlayer`](crate::ErikaPlayer) drop 时自动清掉。
 //!
-//! **只有一条出帧路径**：erika 导出的线性 dma-buf。没有 CPU 回读兜底 —— 宿主
-//! （GTK/GSK）导不进来就没画面（见 `dev_doc/nsh-erika-status.md` §8）。
+//! **每个平台一条出帧路径**：Linux 是 erika 导出的线性 dma-buf，没有 CPU 回读兜底 ——
+//! 宿主（GTK/GSK）导不进来就没画面（见 `dev_doc/nsh-erika-status.md` §8）。
 //!
-//! ## 平台边界（待整理）
+//! ## 帧载荷：`FrameImage`
 //!
-//! 帧槽里装的是 [`erika::DmabufFrame`]，这个类型本身是 **Linux 专用**
-//! （`#[cfg(all(target_os = "linux", not(target_env = "ohos")))]`）。
-//! macOS 的导出物是 `CVPixelBuffer`/Metal 纹理、Windows 是 D3D11 共享纹理，都不是 fd。
-//! 跨平台时这一层要先抽象出帧载荷（比如 `enum FrameImage { Dmabuf(..), Metal(..), D3d(..) }`），
-//! 控件再按平台各取各的。
+//! 帧槽装的是 [`FrameImage`]，不是某个平台的原生句柄类型 —— 这样帧槽的读写口
+//! （`publish` / `current` / `frame_snapshot` / `has_frame`）在所有平台是同一套代码。
+//! 各平台的"这一帧长什么样"由各自的变体表示：
+//!
+//! - Linux：`Dmabuf(erika::DmabufFrame)`，即 `export_frame_dmabuf` 的产物（一个 fd +
+//!   stride/offset/尺寸）；
+//! - Windows：留待第二步 —— erika 给的是 D3D11 共享纹理（`*mut c_void` 的 `IUnknown`），
+//!   见 `dev_doc/nsh-erika-architecture.md` §5.6/§5.9。
+//!
+//! 控件侧按平台各取各的（Linux 在 `linux/frames.rs` 里 `as_dmabuf()` → `GdkDmabufTexture`）。
 //!
 //! 所有待拆点用 `rg 'TODO\(platform\)' src` 一次列全。
 
@@ -34,16 +39,84 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use crate::core::cmd::{ErikaCmd, RenderCmd};
 use crate::core::player::EngineGuard;
 
+/// 一帧的画面载荷：各平台一份变体。
+///
+/// 帧槽的读写口（`publish` / `current` / `frame_snapshot` / `has_frame`）在任何平台都是
+/// 同一件事，分平台的只有"怎么得到一帧"和"怎么把它画出来" —— 所以是一个枚举，而不是把
+/// 整条帧槽按平台 cfg 掉。
+///
+/// 两边的产物都是**GPU 纹理**，只是交给宿主的方式不同：
+///
+/// - Linux：erika `export_frame_dmabuf` 导出的线性 dma-buf（一个 fd）；
+/// - Windows：erika 的 D3D11 共享纹理（`IUnknown`，`GetSharedHandle` 后可被宿主 device 打开）。
+///
+/// 见 dev_doc `nsh-erika-architecture.md` §5.7.1（Windows 为什么走这条）。
+pub enum FrameImage {
+    /// erika 导出的线性 dma-buf（`export_frame_dmabuf` 的产物，四平面打包成一块，
+    /// 按 `stride` 分行、`offset` 起头）。
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    Dmabuf(erika::DmabufFrame),
+    /// erika 发布的 D3D11 共享纹理（`windows_flutter_texture_iunknown` 的产物）。
+    #[cfg(target_os = "windows")]
+    SharedTexture(crate::windows::frame::SharedTexture),
+}
+
+impl FrameImage {
+    /// dma-buf 载荷；不是 dma-buf（别的平台的帧）时 `None`。
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    pub fn as_dmabuf(&self) -> Option<&erika::DmabufFrame> {
+        match self {
+            Self::Dmabuf(frame) => Some(frame),
+        }
+    }
+
+    /// 共享纹理载荷；不是共享纹理时 `None`。
+    #[cfg(target_os = "windows")]
+    pub fn as_shared_texture(&self) -> Option<&crate::windows::frame::SharedTexture> {
+        match self {
+            Self::SharedTexture(frame) => Some(frame),
+        }
+    }
+}
+
+/// 视频宽高比在画布里的**内接矩形**，单位是物理像素。
+///
+/// 两个平台共用同一套几何（Linux 的控件 tick、Windows 的 `draw`），所以放在 core：
+///
+/// - 出帧尺寸只覆盖视频区域，少合成/少搬运一大截像素（竖版控件里放 16:9 的片子能省一半以上）；
+/// - erika 拿它当 libass 的 `PlayRes`，字幕按它排版后不会再被 aspect-fit 拉伸 ——
+///   非全屏时"字幕变扁"那个 bug 顺带没了。
+///
+/// 宽高比还不知道时（轨道还没 probe 出来）先用整块画布，出第一帧之后再收窄。
+pub(crate) fn export_size(aspect: Option<f32>, width: u32, height: u32) -> (u32, u32) {
+    let Some(aspect) = aspect.filter(|aspect| aspect.is_finite() && *aspect > 0.0) else {
+        return (width, height);
+    };
+    // 画布比视频宽 → 高度顶满、左右留边；否则宽度顶满、上下留边。
+    if width as f32 / height as f32 > aspect {
+        let width = ((height as f32) * aspect).round() as u32;
+        (width.max(1), height)
+    } else {
+        let height = ((width as f32) / aspect).round() as u32;
+        (width, height.max(1))
+    }
+}
+
 /// 帧邮箱：1 格、最后写入者胜。**不通知** —— 渲染层每帧主动拉。
 ///
 /// 为什么不走 actor 的 State/Progress：那两条是 `watch`（通知所有观察者"变了"），
 /// 而帧是**取货**——消费者每帧来拉，从不需要通知。
 pub(crate) struct FrameSlot {
-    // TODO(platform): `erika::DmabufFrame` 只有 Linux 有。跨平台时换成帧载荷抽象
-    // （dma-buf fd / Metal 纹理 / D3D 共享纹理），控件的 `FrameBinder` 按平台取。
-    texture: Mutex<Option<Arc<erika::DmabufFrame>>>,
+    // 载荷是平台无关的 `FrameImage`：Linux 装 dma-buf，其它平台的变体等各自接上。
+    texture: Mutex<Option<Arc<FrameImage>>>,
     /// 每写一次 +1。渲染层靠它跳过"同一帧的重复建纹理"。
     generation: AtomicU64,
+    /// 有新帧时叫醒宿主（Windows 的控件在这里注册 `ComponentContext::redraw`）。
+    ///
+    /// Linux 不需要：GTK frame clock 每帧自己敲门，控件按 tick 拉就行。
+    /// Windows 的 `draw` 是**按需重绘**的，没有 frame clock —— 控件自己续帧只能二选一：
+    /// 空转（实测把整窗重绘推到 4400/s）或者断链。所以"发布了新帧"必须由**发布方**推给宿主。
+    waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// 视频原始尺寸 `(w << 32) | h`；0 = 还不知道。引擎写、控件每帧读。
     ///
     /// 放这里而不是 `ErikaStatus`：它是**帧的元信息**，控件每帧都要，而状态通道的语义是
@@ -56,6 +129,7 @@ impl FrameSlot {
         Self {
             texture: Mutex::new(None),
             generation: AtomicU64::new(0),
+            waker: Mutex::new(None),
             video_size: AtomicU64::new(0),
         }
     }
@@ -73,17 +147,45 @@ impl FrameSlot {
     }
 
     /// 引擎侧：写入新帧（替换旧的 → 旧的那个随引用计数归零回收，fd 随之关闭）
-    pub(crate) fn publish(&self, frame: Arc<erika::DmabufFrame>) {
-        let mut g = self.lock();
-        *g = Some(frame);
-        self.generation.fetch_add(1, Ordering::Release);
+    pub(crate) fn publish(&self, frame: Arc<FrameImage>) {
+        {
+            let mut g = self.lock();
+            *g = Some(frame);
+            self.generation.fetch_add(1, Ordering::Release);
+        }
+        self.wake_host();
     }
 
     /// 两侧都能调：open / stop 时作废当前帧
     pub(crate) fn clear(&self) {
-        let mut g = self.lock();
-        *g = None;
-        self.generation.fetch_add(1, Ordering::Release);
+        {
+            let mut g = self.lock();
+            *g = None;
+            self.generation.fetch_add(1, Ordering::Release);
+        }
+        // 画面被作废了（open / stop）：也认宿主重绘一次，把上一张撤掉。
+        self.wake_host();
+    }
+
+    /// 注册"有新帧时叫醒宿主"的回调（只有 Windows 的控件注册；Linux 走 GTK frame clock）。
+    #[allow(dead_code)]
+    pub(crate) fn set_waker(&self, waker: Arc<dyn Fn() + Send + Sync>) {
+        *self.waker.lock().unwrap_or_else(|p| p.into_inner()) = Some(waker);
+    }
+
+    /// 摘掉叫醒回调（控件卸载时）。不摘的话回调会一直攥着宿主的 `ComponentContext`，
+    /// 而播放句柄可能比视图活得久。
+    #[allow(dead_code)]
+    pub(crate) fn clear_waker(&self) {
+        *self.waker.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+
+    /// 叫醒宿主。**不在持锁时调**：回调会进宿主的 UI 线程，别和数据锁绞在一起。
+    fn wake_host(&self) {
+        let waker = self.waker.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(waker) = waker {
+            waker();
+        }
     }
 
     /// 现在槽里有没有帧（零成本，不 clone）。
@@ -92,12 +194,12 @@ impl FrameSlot {
     }
 
     /// 渲染层：一次拿到「代号 + 帧」
-    pub(crate) fn current(&self) -> (u64, Option<Arc<erika::DmabufFrame>>) {
+    pub(crate) fn current(&self) -> (u64, Option<Arc<FrameImage>>) {
         let g = self.lock();
         (self.generation.load(Ordering::Acquire), g.clone())
     }
 
-    fn lock(&self) -> MutexGuard<'_, Option<Arc<erika::DmabufFrame>>> {
+    fn lock(&self) -> MutexGuard<'_, Option<Arc<FrameImage>>> {
         self.texture.lock().unwrap_or_else(|p| p.into_inner()) // 毒化了继续用
     }
 }
@@ -128,6 +230,12 @@ impl Default for FrameRequest {
 pub(crate) struct Request {
     /// "有人要画面"的旗标。60Hz 只换位，用原子；引擎 `swap(false)` 读并复位。
     pub(crate) want_frame: AtomicBool,
+    /// 引擎每轮泵刷新一次"在不在播"。
+    ///
+    /// 给控件决定**要不要主动续帧**用：Windows 上 `draw` 是唯一的 tick 源，播放中必须每帧
+    /// 都要一次；暂停时降频轮询（`seek` 后仍能刷新，又不空转）。Linux 的 GTK frame clock
+    /// 无条件敲门，用不到这个。
+    pub(crate) playing: AtomicBool,
     /// 画布 + 导出尺寸 + DPI。低频，用锁。
     pub(crate) frame: Mutex<FrameRequest>,
 }
@@ -136,6 +244,7 @@ impl Request {
     pub(crate) fn new() -> Self {
         Self {
             want_frame: AtomicBool::new(false),
+            playing: AtomicBool::new(false),
             frame: Mutex::new(FrameRequest::default()),
         }
     }
@@ -167,6 +276,11 @@ pub(crate) struct Slot {
 }
 
 impl Slot {
+    /// 更新"在不在播"的镜像（播放/暂停命令下达时由句柄立刻写，引擎下一轮泵再校正）。
+    pub(crate) fn set_playing(&self, playing: bool) {
+        self.request.playing.store(playing, Ordering::Relaxed);
+    }
+
     /// 它的号（控件绑定显示目标用）。
     pub(crate) fn id(&self) -> u64 {
         self.id
@@ -245,6 +359,15 @@ impl ErikaVideoSource {
         Some(Self { slot })
     }
 
+    /// 现在在不在播（引擎每轮泵刷新的镜像；播放/暂停命令下达时也会立刻写）。
+    ///
+    /// 渲染层目前**不**用它 —— Windows 改成"引擎发布新帧时叫醒宿主"之后就不需要按播放态
+    /// 调续帧频率了。留着给宿主/以后做"暂停降频、只画首帧"之类的优化。
+    #[allow(dead_code)]
+    pub(crate) fn is_playing(&self) -> bool {
+        self.slot.request.playing.load(Ordering::Relaxed)
+    }
+
     /// 视频原始宽高比（没打开 / 没有视频轨时为 `None`）。控件用它算内接矩形。
     pub(crate) fn video_aspect(&self) -> Option<f32> {
         let (width, height) = self.slot.frames.video_size()?;
@@ -277,6 +400,21 @@ impl ErikaVideoSource {
             .send_cmd(ErikaCmd::VideoUnavailable(reason));
     }
 
+    /// 注册"有新帧时叫醒宿主"的回调。
+    ///
+    /// Windows 的控件在拿到 `source` 时注册（`ComponentContext` 是 `Send + Sync`，可以从
+    /// 引擎线程调 `redraw()`）；Linux 的控件不注册 —— 它有 GTK frame clock。
+    #[allow(dead_code)]
+    pub(crate) fn set_host_waker(&self, waker: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        self.slot.frames.set_waker(waker);
+    }
+
+    /// 摘掉叫醒回调（控件卸载 / 换绑时）。
+    #[allow(dead_code)]
+    pub(crate) fn clear_host_waker(&self) {
+        self.slot.frames.clear_waker();
+    }
+
     /// 现在有没有画面可画（**零成本、非阻塞**）。
     pub fn has_frame(&self) -> bool {
         self.slot.frames.has_frame()
@@ -286,7 +424,7 @@ impl ErikaVideoSource {
     ///
     /// 渲染层每帧调它（`erika.video` 控件的 `FrameBinder`），出帧测试也用它 ——
     /// 这是 `FrameSlot` 唯一的读口，控件以外没人能验证"像素真的出来了"。
-    pub fn frame_snapshot(&self) -> (u64, Option<Arc<erika::DmabufFrame>>) {
+    pub fn frame_snapshot(&self) -> (u64, Option<Arc<FrameImage>>) {
         self.slot.frames.current()
     }
 }

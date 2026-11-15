@@ -10,7 +10,7 @@
 //! |---|---|---|
 //! | [`RateProbe`] | `engine.rs` 的 `run` 循环 | 引擎线程每秒醒几次、这一轮出帧了没有 |
 //! | [`TimingsProbe`] | `engine/render.rs::pump_frame` | erika 内部各阶段耗时（pump/sub/video/audio/danmaku/render） |
-//! | [`GtkTickProbe`] | `frames.rs` 的 tick 回调 | GTK 每秒 tick/paint 几次、引擎发了几帧、最大间隔 |
+//! | [`TickProbe`] | 控件的 tick：Linux 的 `linux/frames.rs`、Windows 的 `windows/native_view.rs` | 宿主每秒 tick/paint 几次、引擎发了几帧、最大间隔 |
 //!
 //! 两行一起看就能分清"是谁在降频"：
 //!
@@ -106,7 +106,11 @@ impl TimingsProbe {
     }
 }
 
-/// `NSH_ERIKA_TRACE=1` 时的 GTK tick 统计：每秒一行，专门回答"GTK 到底掉没掉帧"。
+/// `NSH_ERIKA_TRACE=1` 时控件侧的 tick 统计：每秒一行，专门回答"宿主到底掉没掉帧"。
+///
+/// 两个平台共用（tick 的来源不同：Linux 是 GTK frame clock 的回调，Windows 是 NSH 每帧调
+/// 的 `draw`），所以统计口径一样：`tick` 是宿主敲了几次门、`paint` 是我们换上画面几次、
+/// `frames` 是引擎发布了几帧。
 ///
 /// ```text
 /// [nsh-erika] gtk tick ≈60/s paint ≈60/s frames ≈60/s maxgap=18ms
@@ -127,9 +131,8 @@ impl TimingsProbe {
 /// ⚠️ 不要拿 `GdkFrameClock::fps()` 当基准：实测窗口被挡住、tick 掉到 1/s 时它照样报
 /// 57.8 —— 那是 GTK 按 refresh interval 估的**显示器**刷新率，不是实际出帧率。
 ///
-/// TODO(platform): GTK/GSK 专用。macOS 的 tick 来自 `CVDisplayLink`/`CAMetalLayer`，
-/// Windows 走自己的呈现回调 —— 跨平台时各平台一份，或者抽成 `TickProbe` trait。
-pub(crate) struct GtkTickProbe {
+/// macOS 的 tick 会来自 `CVDisplayLink`/`CAMetalLayer`，那时可以复用这套计数。
+pub(crate) struct TickProbe {
     started: Instant,
     ticks: u32,
     paints: u32,
@@ -143,7 +146,7 @@ pub(crate) struct GtkTickProbe {
     primed: bool,
 }
 
-impl GtkTickProbe {
+impl TickProbe {
     pub(crate) fn from_env() -> Option<Self> {
         let on = std::env::var_os("NSH_ERIKA_TRACE")
             .is_some_and(|value| !value.is_empty() && value != "0");
@@ -184,7 +187,7 @@ impl GtkTickProbe {
         // 第一行只用来建基线（否则会把"开播以来的总数"当成每秒值）。
         let published = if self.primed { self.published } else { 0 };
         eprintln!(
-            "[nsh-erika] gtk tick ≈{:.0}/s paint ≈{:.0}/s frames ≈{:.0}/s maxgap={:.0}ms",
+            "[nsh-erika] tick ≈{:.0}/s paint ≈{:.0}/s frames ≈{:.0}/s maxgap={:.0}ms",
             per_second(self.ticks.into()),
             per_second(self.paints.into()),
             per_second(published),

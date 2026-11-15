@@ -46,6 +46,42 @@ const IDLE: Duration = Duration::from_millis(10);
 /// 上游 `DEFAULT_AUDIO_LEAD_TIME` 是 120ms(音频领先时钟 120ms 就够),50ms 一次留了两倍余量。
 const KEEPALIVE_EVERY: Duration = Duration::from_millis(50);
 
+/// Windows 的泵间隔：**比 Linux 密得多**，因为 Windows 没有宿主 tick 来"要帧"。
+///
+/// Linux 上 GTK frame clock 每帧敲一次控件 tick → `request_frame` → 引擎被叫醒；
+/// Windows 上控件是"按需重绘"的，引擎得自己按帧率泵：`render_tick` 在场景没变时
+/// 几乎零成本（上游 `flutter_scene.matches` 直接返回），所以喷得密不亏。
+#[cfg(target_os = "windows")]
+const WINDOWS_PUMP_EVERY: Duration = Duration::from_millis(16);
+
+/// Windows 的循环心跳。和泵同频 → 干净的 ~60Hz，而不是"10ms 醒来、16ms 才泵"的抖动。
+#[cfg(target_os = "windows")]
+const WINDOWS_IDLE: Duration = Duration::from_millis(16);
+
+/// 本平台的心跳间隔（见 [`IDLE`] 与 [`WINDOWS_IDLE`]）。
+fn idle_every() -> Duration {
+    #[cfg(target_os = "windows")]
+    {
+        WINDOWS_IDLE
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        IDLE
+    }
+}
+
+/// 本平台"多久泵一次"（见上面两个常量的说明）。
+fn pump_every() -> Duration {
+    #[cfg(target_os = "windows")]
+    {
+        WINDOWS_PUMP_EVERY
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        KEEPALIVE_EVERY
+    }
+}
+
 /// 引擎发给 UI 的事件。**只是"去重新拉一次状态"的通知**,不带数据 ——
 /// 状态本身在 actor 的 `watch` 里,事件只负责把 UI 叫醒。
 #[derive(Clone, Debug)]
@@ -121,6 +157,13 @@ pub(crate) struct ErikaEngine {
     /// 所以这是**边沿**标记：失败记一次、成功就复位，日志不刷屏。
     keepalive_failed: bool,
 
+    /// Windows：presenter 上当前挂着的出图面尺寸 `(宽, 高, DPI 缩放)`。
+    ///
+    /// Windows 没有"导出一帧"的接口，必须**先 attach 一个 `FlutterTexture` surface**，
+    /// erika 才会渲染并发共享纹理快照。尺寸/DPI 变了走 `resize_surface`（只重建 targets），
+    /// 不要重新 attach。
+    #[cfg(target_os = "windows")]
+    surface_metrics: Option<(u32, u32, f64)>,
     /// 诊断（`NSH_ERIKA_TRACE=1`）：每 60 次出帧一行各阶段耗时，实现在 `trace.rs`。
     timings_probe: Option<crate::core::trace::TimingsProbe>,
 }
@@ -140,6 +183,8 @@ impl ErikaEngine {
             last_rendered: false,
             last_keepalive: Instant::now(),
             tick_probe: crate::core::trace::RateProbe::from_env("engine tick"),
+            #[cfg(target_os = "windows")]
+            surface_metrics: None,
         }
     }
     pub(crate) fn player_clone(&self) -> Player {
@@ -277,7 +322,7 @@ impl ThreadActor for ErikaEngine {
     fn run(mut self, mut ctx: ActorContext<Self>) {
         loop {
             // 命令 = 要不要出帧由它说;空闲超时也走一遍(没人要帧就什么都不做)
-            let pump = match ctx.recv_cmd_timeout(IDLE) {
+            let pump = match ctx.recv_cmd_timeout(idle_every()) {
                 Ok(cmd) => self.on_cmd(cmd, &ctx),
                 Err(CmdWait::Timeout) => true,
                 Err(CmdWait::Closed) => break, // stop() 或所有句柄都没了
@@ -309,10 +354,13 @@ impl ThreadActor for ErikaEngine {
 /// 它自带一个 wgpu 29 的 device(帧由它导出成 dma-buf,宿主一个 GPU 设备都不用建),
 /// 建一次要几十毫秒 —— 不能在 UI 线程上做。
 fn new_presenter() -> Result<PresenterRuntime, String> {
+    #[cfg(target_os = "linux")]
+    let renderer = RendererBackendPreference::WgpuFallback;
+    #[cfg(target_os = "windows")]
+    let renderer = RendererBackendPreference::PlatformNative;
     PresenterRuntime::new(PresenterConfig {
-        // 导出纹理必须走 wgpu 渲染器,默认的原生后端不支持
         player: PlayerConfig {
-            renderer: RendererBackendPreference::WgpuFallback,
+            renderer,
             ..PlayerConfig::default()
         },
         ..PresenterConfig::default()
