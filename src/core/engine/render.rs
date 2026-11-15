@@ -89,16 +89,101 @@ impl ErikaEngine {
             // 由应用决定整条降级到 NSH 内置 <video>。
             Err(e) => self.latch_video_unavailable(format!("dma-buf 导出失败: {e}")),
         }
-        // Windows：导出还没接（见上面的 TODO(windows)）。这一轮只把音频/时钟泵一下，
-        // 帧槽留空 —— 控件现在是空壳，"要不要出帧"的旗标照常按需复位。
+        // Windows：没有 `export_frame_dmabuf` 那种"交出一帧"的接口（d3d11 不实现
+        // `export_frame_texture`），走 erika 给 Flutter 准备的那条出口：attach 一次
+        // surface → 每轮 `render_tick` 让 erika 渲染并发布一张 `MISC_SHARED` 快照 →
+        // 把快照的引用包成 `FrameImage::SharedTexture`。见 dev_doc §5.7.1。
         #[cfg(target_os = "windows")]
         {
-            let _ = (width, height, scale);
+            if let Some(reason) = self.ensure_win_surface(width, height, scale) {
+                return self.latch_video_unavailable(reason);
+            }
             let time = self.presenter.media_time().as_secs_f64();
-            let _ = self.presenter.render_tick(time);
-            self.last_keepalive = Instant::now();
-            None
+            match self.presenter.render_tick(time) {
+                Ok(_) => {
+                    self.keepalive_failed = false;
+                    self.last_keepalive = Instant::now();
+                    self.publish_win_frame();
+                    None
+                }
+                // 单帧失败不算"本机没有出帧路径"（可能是瞬时错误），记一次边沿日志。
+                Err(e) => {
+                    if !self.keepalive_failed {
+                        self.keepalive_failed = true;
+                        log::warn!("erika.video: render_tick 失败: {e}");
+                    }
+                    None
+                }
+            }
         }
+    }
+
+    /// Windows：保证 presenter 上挂着一个和当前画布一致的 `FlutterTexture` surface。
+    ///
+    /// 首次 attach；之后尺寸/DPI 变了只 `resize_surface`（重建 targets，不换 surface）。
+    /// 返回 `Some(文案)` = 这台机器挂不上出图面（应用据此整条降级到内置 `<video>`）。
+    #[cfg(target_os = "windows")]
+    fn ensure_win_surface(&mut self, width: u32, height: u32, scale: f64) -> Option<String> {
+        let want = (width.max(1), height.max(1), scale);
+        if self.surface_metrics == Some(want) {
+            return None;
+        }
+        let attached = self.surface_metrics.is_some();
+        let result = if attached {
+            self.presenter.resize_surface(want.0, want.1, want.2)
+        } else {
+            // `texture_id` 只是标识：erika 不建真 Flutter 纹理，快照由渲染器自己建
+            // （d3d11.rs::create_flutter_texture_target，`D3D11_RESOURCE_MISC_SHARED`）。
+            self.presenter
+                .attach_surface(erika::PlatformSurface::FlutterTexture(
+                    erika::FlutterTextureHandle::new(
+                        erika::FlutterTextureKind::WindowsTextureRegistrar,
+                        0,
+                        want.0,
+                        want.1,
+                        want.2,
+                    ),
+                ))
+        };
+        match result {
+            Ok(()) => {
+                log::info!(
+                    "erika.video: {} 出图面 {}x{} scale={scale}",
+                    if attached { "resize" } else { "attach" },
+                    want.0,
+                    want.1
+                );
+                self.surface_metrics = Some(want);
+                self.published_handle = None; // 尺寸变了，上一张快照作废
+                None
+            }
+            Err(e) => Some(format!("Windows 出图面挂不上: {e}")),
+        }
+    }
+
+    /// Windows：把 erika 最新快照的引用交给帧槽。
+    ///
+    /// 指针没变 = 这一轮没有新画面（暂停 / 场景没变化时 erika 会跳过 publish），
+    /// 那就只把这一轮多拿的那次引用丢掉，不重复发布。
+    #[cfg(target_os = "windows")]
+    fn publish_win_frame(&mut self) {
+        use crate::core::source::FrameImage;
+        use crate::windows::frame::SharedTexture;
+        use std::sync::Arc;
+
+        // SAFETY 之外的一层约定：上游 `into_raw()` 已经 AddRef，拿到的引用归我们。
+        let Some(raw) = self.presenter.windows_flutter_texture_iunknown() else {
+            return;
+        };
+        let frame = unsafe { SharedTexture::from_owned_raw(raw) };
+        if self.published_handle == Some(raw as usize) {
+            // frame 在这里 drop → Release 掉这一轮多拿的那一次。
+            return;
+        }
+        self.published_handle = Some(raw as usize);
+        self.frames
+            .publish(Arc::new(FrameImage::SharedTexture(frame)));
+        self.last_rendered = true;
     }
 
     /// 保活泵：**只**喂音频 / 推进时钟 / 推进解码,不取帧、不建纹理。

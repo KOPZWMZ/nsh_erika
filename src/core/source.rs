@@ -45,13 +45,20 @@ use crate::core::player::EngineGuard;
 /// 同一件事，分平台的只有"怎么得到一帧"和"怎么把它画出来" —— 所以是一个枚举，而不是把
 /// 整条帧槽按平台 cfg 掉。
 ///
-/// 目前只有 Linux 的 `Dmabuf` 变体；Windows 的共享纹理变体等第二步
-/// （dev_doc `nsh-erika-architecture.md` §5.9）。
+/// 两边的产物都是**GPU 纹理**，只是交给宿主的方式不同：
+///
+/// - Linux：erika `export_frame_dmabuf` 导出的线性 dma-buf（一个 fd）；
+/// - Windows：erika 的 D3D11 共享纹理（`IUnknown`，`GetSharedHandle` 后可被宿主 device 打开）。
+///
+/// 见 dev_doc `nsh-erika-architecture.md` §5.7.1（Windows 为什么走这条）。
 pub enum FrameImage {
     /// erika 导出的线性 dma-buf（`export_frame_dmabuf` 的产物，四平面打包成一块，
     /// 按 `stride` 分行、`offset` 起头）。
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     Dmabuf(erika::DmabufFrame),
+    /// erika 发布的 D3D11 共享纹理（`windows_flutter_texture_iunknown` 的产物）。
+    #[cfg(target_os = "windows")]
+    SharedTexture(crate::windows::frame::SharedTexture),
 }
 
 impl FrameImage {
@@ -61,6 +68,37 @@ impl FrameImage {
         match self {
             Self::Dmabuf(frame) => Some(frame),
         }
+    }
+
+    /// 共享纹理载荷；不是共享纹理时 `None`。
+    #[cfg(target_os = "windows")]
+    pub fn as_shared_texture(&self) -> Option<&crate::windows::frame::SharedTexture> {
+        match self {
+            Self::SharedTexture(frame) => Some(frame),
+        }
+    }
+}
+
+/// 视频宽高比在画布里的**内接矩形**，单位是物理像素。
+///
+/// 两个平台共用同一套几何（Linux 的控件 tick、Windows 的 `draw`），所以放在 core：
+///
+/// - 出帧尺寸只覆盖视频区域，少合成/少搬运一大截像素（竖版控件里放 16:9 的片子能省一半以上）；
+/// - erika 拿它当 libass 的 `PlayRes`，字幕按它排版后不会再被 aspect-fit 拉伸 ——
+///   非全屏时"字幕变扁"那个 bug 顺带没了。
+///
+/// 宽高比还不知道时（轨道还没 probe 出来）先用整块画布，出第一帧之后再收窄。
+pub(crate) fn export_size(aspect: Option<f32>, width: u32, height: u32) -> (u32, u32) {
+    let Some(aspect) = aspect.filter(|aspect| aspect.is_finite() && *aspect > 0.0) else {
+        return (width, height);
+    };
+    // 画布比视频宽 → 高度顶满、左右留边；否则宽度顶满、上下留边。
+    if width as f32 / height as f32 > aspect {
+        let width = ((height as f32) * aspect).round() as u32;
+        (width.max(1), height)
+    } else {
+        let height = ((width as f32) / aspect).round() as u32;
+        (width, height.max(1))
     }
 }
 

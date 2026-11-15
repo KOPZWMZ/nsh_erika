@@ -13,6 +13,7 @@ use std::time::Instant;
 use gtk::prelude::*;
 use nsh_platform_linux::gtk4 as gtk;
 
+use crate::core::source::export_size;
 use crate::{ErikaVideoSource, FrameImage, FrameRequest};
 
 /// `DRM_FORMAT_ABGR8888`（内存里是 R,G,B,A，对应 erika 的 R8G8B8A8_UNORM）。
@@ -122,7 +123,7 @@ impl FrameBinder {
                                     frame.stride(),
                                     frame.offset(),
                                 );
-                                }  
+                                }
                             }
                             picture.set_paintable(Some(&texture));
                         }
@@ -168,23 +169,6 @@ impl FrameBinder {
         self.ticking = Rc::new(Cell::new(false));
         self.source = None;
         self.picture.set_paintable(None::<&gtk::gdk::Texture>);
-    }
-}
-
-/// 视频宽高比在控件里的内接矩形，单位是物理像素。
-///
-/// 宽高比还不知道时（轨道还没 probe 出来）先用整块控件，出第一帧之后再收窄。
-fn export_size(aspect: Option<f32>, width: u32, height: u32) -> (u32, u32) {
-    let Some(aspect) = aspect.filter(|aspect| aspect.is_finite() && *aspect > 0.0) else {
-        return (width, height);
-    };
-    // 控件比视频宽 → 高度顶满、左右留边；否则宽度顶满、上下留边。
-    if width as f32 / height as f32 > aspect {
-        let width = ((height as f32) * aspect).round() as u32;
-        (width.max(1), height)
-    } else {
-        let height = ((width as f32) / aspect).round() as u32;
-        (width, height.max(1))
     }
 }
 

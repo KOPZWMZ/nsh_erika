@@ -147,6 +147,8 @@ pub use nsh_platform_windows as platform;
 pub use platform::Components as PlatformComponents;
 #[cfg(target_os = "windows")]
 pub(crate) use windows as backend;
+#[cfg(target_os = "windows")]
+pub use windows::frame::SharedTexture;
 // 句柄的 `call` / `status` 直接暴露 erika 自己的类型:不另造一层。
 pub use erika::MediaRequest;
 /// 只导出**出现在我们公开签名 / 公开字段里**的上游类型 —— 消费者不依赖 erika。

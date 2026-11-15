@@ -121,6 +121,20 @@ pub(crate) struct ErikaEngine {
     /// 所以这是**边沿**标记：失败记一次、成功就复位，日志不刷屏。
     keepalive_failed: bool,
 
+    /// Windows：presenter 上当前挂着的出图面尺寸 `(宽, 高, DPI 缩放)`。
+    ///
+    /// Windows 没有"导出一帧"的接口，必须**先 attach 一个 `FlutterTexture` surface**，
+    /// erika 才会渲染并发共享纹理快照。尺寸/DPI 变了走 `resize_surface`（只重建 targets），
+    /// 不要重新 attach。
+    #[cfg(target_os = "windows")]
+    surface_metrics: Option<(u32, u32, f64)>,
+    /// Windows：上一次发布出去的共享纹理指针（[`SharedTexture::raw`]）。
+    ///
+    /// 只用来判断"这一轮有没有新画面"：erika 遇到未变化的场景会跳过 publish，
+    /// 那时拿到的还是同一个对象。我们持有那帧的引用，所以地址不会被复用 ——
+    /// 指针比较没有 ABA 问题（dev_doc §5.7.1）。
+    #[cfg(target_os = "windows")]
+    published_handle: Option<usize>,
     /// 诊断（`NSH_ERIKA_TRACE=1`）：每 60 次出帧一行各阶段耗时，实现在 `trace.rs`。
     timings_probe: Option<crate::core::trace::TimingsProbe>,
 }
@@ -140,6 +154,10 @@ impl ErikaEngine {
             last_rendered: false,
             last_keepalive: Instant::now(),
             tick_probe: crate::core::trace::RateProbe::from_env("engine tick"),
+            #[cfg(target_os = "windows")]
+            surface_metrics: None,
+            #[cfg(target_os = "windows")]
+            published_handle: None,
         }
     }
     pub(crate) fn player_clone(&self) -> Player {
