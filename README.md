@@ -1,5 +1,9 @@
 # nsh-erika
 
+> Native video for [Native Shell](https://nsh.dev): the *erika* playback core bridged into the
+> `erika.video` native component — zero-copy GPU handoff on Linux (linear dma-buf) and
+> Windows (D3D11 shared texture), with hardware decode, libass subtitles and danmaku.
+
 [NSH](https://nsh.dev) 的原生视频控件 `erika.video`：把 [liberika](https://github.com/AimesSoft/liberika)
 （erika 播放内核）的画面接进 NSH 的界面树。
 
@@ -11,7 +15,7 @@
 - 解码 / 同步 / 字幕（libass）/ 弹幕 / 音频全在 erika：硬解、A/V 同步、色彩、FSR 超分都不需要你写。
 
 | 平台 | 出帧路径 | 状态 |
-|---|---|---|
+| --- | --- | --- |
 | **Linux** | erika 导出线性 dma-buf → GDK 直接导入 → GSK 当纹理采样 | ✅ 跑通（VA-API 直通硬解 + 弹幕 + 字幕） |
 | **Windows** | erika 发布 `MISC_SHARED` 快照 → `OpenSharedResource` → D2D `DrawBitmap` | ✅ 跑通（D3D11VA 硬解 + 弹幕 + 字幕） |
 | macOS / Android | — | 未做（编译期 `compile_error!` 挡住） |
@@ -23,8 +27,8 @@
 ```toml
 [dependencies]
 nsh-core = "0.5.1"
-nsh-base = "0.5.1"                      # 只有示例用；你自己的 UI 用什么都行
-nsh-erika = { git = "https://github.com/KOP-zero/nsh_erika", branch = "main" }
+nsh-base = "0.5.1"                    
+nsh-erika = { git = "https://github.com/KOPZWMZ/nsh_erika", tag = "v0.1.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = { version = "0.5.1", default-features = false }
@@ -86,7 +90,7 @@ NSH_ERIKA_SRC=/path/to/video.mkv nsh run     # 或：cargo run
 ```
 
 | 环境变量 | 作用 | 默认 |
-|---|---|---|
+| --- | --- | --- |
 | `NSH_ERIKA_SRC` | 片源路径 | `../../media/tiny.mkv` |
 | `DMK` | 弹幕轨道；`off` = 不挂弹幕 | `../../media/danmaku.json` |
 | `NSH_ERIKA_TRACE=1` | 打 `engine tick` / `tick ≈ paint ≈ frames` 探针 | 关 |
@@ -96,7 +100,7 @@ NSH_ERIKA_SRC=/path/to/video.mkv nsh run     # 或：cargo run
 ## 文档
 
 | 文件 | 内容 |
-|---|---|
+| --- | --- |
 | [docs/api.md](docs/api.md) | 控制面、状态读取、弹幕/字幕、生命周期、失败语义、平台差异 |
 | [docs/linux.md](docs/linux.md) | Linux 依赖准备、构建、验证、已知限制 |
 | [docs/windows.md](docs/windows.md) | Windows 依赖准备、构建、验证、排查、已知限制 |
@@ -104,7 +108,7 @@ NSH_ERIKA_SRC=/path/to/video.mkv nsh run     # 或：cargo run
 ## 已知限制
 
 | 限制 | 影响 | 备注 |
-|---|---|---|
+| --- | --- | --- |
 | Windows 每帧一次 `CopyResource` + 一次 GPU 同步等待 | 4K 高帧率时的成本大头 | 上游 legacy `MISC_SHARED` 句柄没有 fence/keystate 原语，生产者只能等完再交 |
 | Windows 输出钉死 SDR | HDR 片源会被 tone-map | 想保留 HDR 要上游动渲染管线 |
 | Windows 每帧新纹理 + 每帧 `OpenSharedResource` | 分配器压力 | 由上游池化解决 |
@@ -119,6 +123,17 @@ cargo test --lib                     # 单元测试（毫秒级）
 cargo test --doc                     # 文档示例
 bash scripts/test-integration.sh     # 集成测试（需要 GPU + /dev/dri）
 ```
+
+## 许可
+
+本仓库以 **MIT OR Apache-2.0** 双许可发布，任选其一（Rust 生态惯例）：
+
+- [LICENSE-MIT](LICENSE-MIT)
+- [LICENSE-APACHE](LICENSE-APACHE)
+
+依赖的播放内核 [liberika](https://github.com/AimesSoft/liberika) 有自己的许可（其 FFmpeg 依赖
+用 LGPL profile）。只使用本仓库的源码不产生额外义务；**分发带 erika 的二进制**时要满足它和
+LGPL FFmpeg 的要求。
 
 ## 致谢
 
