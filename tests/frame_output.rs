@@ -78,7 +78,7 @@ fn next_frame(
         let (generation, frame) = source.frame_snapshot();
         if generation > after
             && let Some(image) = frame
-            && let Some(frame) = image.as_dmabuf()
+            && let Some(_frame) = image.as_dmabuf()
         {
             return Some((generation, image.clone()));
         }
@@ -253,10 +253,11 @@ fn decodes_and_exports_pixels() {
     player.play();
 
     // ── 1. 首帧 + 几何 ─────────────────────────────────────────────────────
-    let Some((mut generation, frame)) = next_frame(&source, EXPORT, 0, FRAME_TIMEOUT) else {
+    let Some((mut generation, image)) = next_frame(&source, EXPORT, 0, FRAME_TIMEOUT) else {
         report_missing_frame(&player, "首帧");
         return;
     };
+    let frame = image.as_dmabuf().expect("Linux 的帧载荷是 dma-buf");
     assert_geometry(&frame, EXPORT, "首帧");
 
     // ── 2. 像素（加分项，读不到不算失败）──────────────────────────────────
@@ -298,7 +299,7 @@ fn decodes_and_exports_pixels() {
         identities.insert(identity);
     }
     for index in 0..RING_FRAMES {
-        let Some((next_generation, frame)) = next_frame(&source, EXPORT, generation, FRAME_TIMEOUT)
+        let Some((next_generation, image)) = next_frame(&source, EXPORT, generation, FRAME_TIMEOUT)
         else {
             panic!(
                 "连续出帧失败：第 {} 帧没来（池是 3 槽轮转，说明 export 卡住了）",
@@ -310,6 +311,7 @@ fn decodes_and_exports_pixels() {
             "generation 应严格递增：{generation} → {next_generation}"
         );
         generation = next_generation;
+        let frame = image.as_dmabuf().expect("Linux 的帧载荷是 dma-buf");
         assert_geometry(&frame, EXPORT, &format!("第 {} 帧", index + 2));
         if let Some(identity) = dma_buf_identity(&frame) {
             identities.insert(identity);
@@ -333,11 +335,12 @@ fn decodes_and_exports_pixels() {
     let deadline = Instant::now() + Duration::from_millis(1200);
     let mut later_pixels = None;
     while Instant::now() < deadline {
-        let Some((next_generation, frame)) =
+        let Some((next_generation, image)) =
             next_frame(&source, EXPORT, generation, Duration::from_millis(200))
         else {
             continue;
         };
+        let frame = image.as_dmabuf().expect("Linux 的帧载荷是 dma-buf");
         generation = next_generation;
         if let Some(stats) = read_pixels(&frame) {
             later_pixels = Some(stats);
@@ -357,9 +360,10 @@ fn decodes_and_exports_pixels() {
     }
 
     // ── 5. 改导出尺寸：池按新尺寸重建并继续出帧 ────────────────────────────
-    let Some((_, resized)) = next_frame(&source, EXPORT_RESIZED, generation, FRAME_TIMEOUT) else {
+    let Some((_, image)) = next_frame(&source, EXPORT_RESIZED, generation, FRAME_TIMEOUT) else {
         panic!("改导出尺寸后没出帧：dma-buf 池没按新尺寸重建？");
     };
+    let resized = image.as_dmabuf().expect("linux是dmabuf");
     assert_geometry(&resized, EXPORT_RESIZED, "改尺寸后");
 
     eprintln!(

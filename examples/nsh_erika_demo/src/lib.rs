@@ -10,6 +10,7 @@
 
 use nsh_base::{button, theme};
 use nsh_core::prelude::*;
+use nsh_erika::PlaformComponents;
 
 /// The app's UI set (`nsh.json` `"rust"`): what a TSX entry may import from
 /// `nsh_erika_demo/native`.
@@ -20,14 +21,14 @@ fn register_ui(registry: &mut Registry) {
 
 /// `nsh-erika` 的原生控件。入口必须写在应用 crate 的根：nsh 生成的宿主按平台
 /// 来这里找固定名字的函数。
-#[cfg(target_os = "linux")]
+
 #[native_components(linux)]
-fn register_components(components: &nsh_platform_linux::Components) {
+fn register_components_linux(components: &PlaformComponents) {
     nsh_erika::register(components);
 }
-#[cfg(target_os = "windowsx")]
+
 #[native_components(windows)]
-fn register_components(components: &nsh_platform_windows::Components) {
+fn register_components_window(components: &PlaformComponents) {
     nsh_erika::register(components);
 }
 /// The application's root component。

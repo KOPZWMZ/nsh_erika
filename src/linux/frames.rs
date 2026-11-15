@@ -13,7 +13,7 @@ use std::time::Instant;
 use gtk::prelude::*;
 use nsh_platform_linux::gtk4 as gtk;
 
-use crate::{ErikaVideoSource, FrameRequest};
+use crate::{ErikaVideoSource, FrameImage, FrameRequest};
 
 /// `DRM_FORMAT_ABGR8888`（内存里是 R,G,B,A，对应 erika 的 R8G8B8A8_UNORM）。
 const FOURCC_ABGR8888: u32 = 0x3432_4241;
@@ -92,7 +92,7 @@ impl FrameBinder {
                 scale,
             });
 
-            let (generation, frame) = source.frame_snapshot();
+            let (generation, image) = source.frame_snapshot();
             let count = ticks.get() + 1;
             ticks.set(count);
             // 诊断：`NSH_ERIKA_TRACE=1` 时每 2 秒打一行状态。
@@ -108,12 +108,13 @@ impl FrameBinder {
             }
             let mut swapped = false;
             if generation != painted.get() {
-                match frame.as_dmabuf() {
-                    Some(frame) => match texture_for(&frame) {
+                match image {
+                    Some(image) => match texture_for(&image) {
                         Some(texture) => {
                             swapped = true;
                             if !first.get() {
                                 first.set(true);
+                                if let Some(frame) = image.as_dmabuf(){
                                 log::info!(
                                     "erika.video: 第一帧 dma-buf {}x{} stride={} offset={}",
                                     frame.width(),
@@ -121,6 +122,7 @@ impl FrameBinder {
                                     frame.stride(),
                                     frame.offset(),
                                 );
+                                }  
                             }
                             picture.set_paintable(Some(&texture));
                         }
@@ -187,8 +189,9 @@ fn export_size(aspect: Option<f32>, width: u32, height: u32) -> (u32, u32) {
 }
 
 /// 把引擎给的 dma-buf 帧变成 GTK 能贴的纹理。
-fn texture_for(frame: &erika::DmabufFrame) -> Option<gtk::gdk::Texture> {
+fn texture_for(image: &FrameImage) -> Option<gtk::gdk::Texture> {
     // 交给 GDK 一份自己的 fd：它会在 release 回调里关掉，引擎那份不受影响。
+    let frame = image.as_dmabuf()?;
     let owned = match frame.try_clone_fd() {
         Ok(fd) => fd,
         Err(error) => {

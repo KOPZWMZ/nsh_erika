@@ -110,16 +110,15 @@ compile_error!(
 );
 
 mod core;
-
 #[cfg(target_os = "linux")]
-pub use linux::native_view::ErikaView;
+pub(crate) use linux as backend;
+#[cfg(target_os = "linux")]
+pub use nsh_platform_linux as plaform;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "windows")]
-pub use windows::native_view::ErikaView;
-
+pub use backend::native_view::ErikaView;
 pub use core::engine::{ErikaEvent, ErikaEvents};
 pub use core::player::{
     BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuSnapshot,
@@ -128,6 +127,11 @@ pub use core::player::{
 };
 pub use core::source::{ErikaVideoSource, FrameImage, FrameRequest};
 pub use erika::PlayerState;
+#[cfg(target_os = "windows")]
+pub use nsh_platform_windows as plaform;
+pub use plaform::Components as PlaformComponents;
+#[cfg(target_os = "windows")]
+pub(crate) use windows as backend;
 // 句柄的 `call` / `status` 直接暴露 erika 自己的类型:不另造一层。
 pub use erika::MediaRequest;
 /// 只导出**出现在我们公开签名 / 公开字段里**的上游类型 —— 消费者不依赖 erika。
@@ -146,17 +150,8 @@ pub const COMPONENT_NAME: &str = "erika.video";
 ///
 /// 调用点是**应用 crate 的根**（`nsh.json` `"rust"` 那个 crate）：nsh 生成的宿主按平台
 /// 去那里找固定名字的入口，不能写在这个库里面。
-#[cfg(target_os = "linux")]
-pub fn register(components: &nsh_platform_linux::Components) {
-    components.register(COMPONENT_NAME, linux::native_view::factory());
-}
-/// 把 `erika.video` 注册进 `components`。
-///
-/// 调用点是**应用 crate 的根**（`nsh.json` `"rust"` 那个 crate）：nsh 生成的宿主按平台
-/// 去那里找固定名字的入口，不能写在这个库里面。
-#[cfg(target_os = "windows")]
-pub fn register(component: &nsh_platform_windows::Components) {
-    component.register(COMPONENT_NAME, windows::native_view::factory());
+pub fn register(component: &PlaformComponents) {
+    component.register(COMPONENT_NAME, backend::native_view::factory());
 }
 
 impl ErikaPlayer {

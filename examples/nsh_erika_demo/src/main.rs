@@ -16,12 +16,10 @@ fn main() -> impl std::process::Termination {
     // （`nsh run` 走的是 `#[native_components(linux)]` 那个入口，不用这句）。
     let options = platform::AppOptions {
         title: "nsh_erika_demo".to_owned(),
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
         app_id: "com.example.nsh_erika_demo".to_owned(),
         size: (1280, 720),
         ..Default::default()
     };
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
     nsh_erika::register(&options.components);
     platform::run_app(
         platform::AppSource::Rust(platform::Root::of::<nsh_app_erika_demo::App>()),
