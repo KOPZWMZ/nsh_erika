@@ -38,12 +38,15 @@ use nsh_platform_windows::{
     windows::{
         Win32::Graphics::{
             Direct2D::{
-                Common::{D2D_RECT_F, D2D1_ALPHA_MODE_IGNORE, D2D1_INTERPOLATION_MODE_LINEAR},
-                D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_PIXEL_FORMAT, ID2D1Bitmap1,
-                ID2D1Device2, ID2D1DeviceContext,
+                Common::{D2D_RECT_F, D2D1_ALPHA_MODE_IGNORE, D2D1_PIXEL_FORMAT},
+                D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_LINEAR,
+                ID2D1Bitmap1, ID2D1Device2, ID2D1DeviceContext,
             },
             Direct3D11::{ID3D11Device, ID3D11Texture2D},
-            Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGIDevice, IDXGIResource, IDXGISurface},
+            Dxgi::{
+                Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGIDevice, IDXGIDeviceSubObject,
+                IDXGIResource, IDXGISurface,
+            },
         },
         core::Interface,
     },
@@ -326,8 +329,7 @@ fn d3d_device(dc: &ID2D1DeviceContext) -> Option<ID3D11Device> {
         if let Ok(target) = dc.GetTarget()
             && let Ok(bitmap) = target.cast::<ID2D1Bitmap1>()
             && let Ok(surface) = bitmap.GetSurface()
-            && let Ok(sub_object) =
-                surface.cast::<nsh_platform_windows::windows::Win32::Graphics::Dxgi::IDXGIDeviceSubObject>()
+            && let Ok(sub_object) = surface.cast::<IDXGIDeviceSubObject>()
             && let Ok(d3d) = sub_object.GetDevice::<ID3D11Device>()
         {
             return Some(d3d);
