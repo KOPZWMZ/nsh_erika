@@ -56,6 +56,18 @@ use nsh_platform_windows::{
 use crate::core::source::export_size;
 use crate::{ErikaVideoSource, FrameImage, FrameRequest};
 
+/// `request_frame` 的最小间隔：把"要帧"压在显示帧率的量级上。
+///
+/// 不加这道闸会**自激**：`draw → request_frame → Wake → 引擎出帧 → waker → draw → …`。
+/// 视频 30fps 时这条链会被"没有新帧"自然打断；**一旦有弹幕在飘**，弹幕位置每 tick 都在动，
+/// 于是每次 Wake 都产出一次发布 —— 实测 600 次/秒，等于把每帧的拷贝 + 同步放大 20 倍。
+const REQUEST_EVERY: Duration = Duration::from_millis(16);
+
+/// 多久没画上新画面，就允许越过 [`REQUEST_EVERY`] 再要一次。
+///
+/// 给"暂停时拖进度条"这类只有一次交互的场景兜底：那时不会再有 waker 回来叫我们。
+const STARVE_AFTER: Duration = Duration::from_millis(200);
+
 /// 注册用的工厂。
 pub(crate) fn factory() -> ComponentFactory {
     Rc::new(|cx: ComponentContext| -> Box<dyn NativeComponent> { Box::new(ErikaView::new(cx)) })
@@ -78,6 +90,10 @@ pub struct ErikaView {
     first_frame: Cell<bool>,
     /// `NSH_ERIKA_TRACE=1`：每秒一行 tick/paint/frames 统计（和 Linux 共用 `TickProbe`）。
     probe: RefCell<Option<crate::core::trace::TickProbe>>,
+    /// 上一次 `request_frame` 的时刻（`None` = 还没要过，第一次总是要）。
+    last_request: Cell<Option<Instant>>,
+    /// 上一次真正画上新画面的时刻（判断"饿死"用）。
+    last_paint: Cell<Option<Instant>>,
 }
 
 /// 一张已经能画的帧：打开的纹理 + 包在它上面的 D2D 位图。
@@ -104,6 +120,8 @@ impl ErikaView {
             open_failed: Cell::new(false),
             first_frame: Cell::new(false),
             probe: RefCell::new(crate::core::trace::TickProbe::from_env()),
+            last_request: Cell::new(None),
+            last_paint: Cell::new(None),
         }
     }
 }
@@ -139,7 +157,21 @@ impl NativeComponent for ErikaView {
         // 弹幕/字幕的排版视口也跟 Linux 的 `PlayRes` 一致。
         let aspect = source.video_aspect();
         let export = export_size(aspect, width, height);
-        source.request_frame(FrameRequest { export, scale });
+
+        // 要帧节流：见 `REQUEST_EVERY` / `STARVE_AFTER` 的说明。
+        let now = Instant::now();
+        let starving = self
+            .last_paint
+            .get()
+            .is_none_or(|painted| now.duration_since(painted) >= STARVE_AFTER);
+        let due = self
+            .last_request
+            .get()
+            .is_none_or(|asked| now.duration_since(asked) >= REQUEST_EVERY);
+        if starving || due {
+            self.last_request.set(Some(now));
+            source.request_frame(FrameRequest { export, scale });
+        }
 
         // 取帧：代号变了（或者换了 dc = 设备重置过）才重建位图 —— 建一次要 QI +
         // OpenSharedResource，不能每帧做。
@@ -155,6 +187,9 @@ impl NativeComponent for ErikaView {
             if let Some(image) = image.as_deref() {
                 *cache = self.rebuild(dc, image, generation);
                 painted = cache.is_some();
+                if painted {
+                    self.last_paint.set(Some(Instant::now()));
+                }
             }
         }
 

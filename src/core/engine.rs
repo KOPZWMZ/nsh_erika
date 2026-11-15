@@ -52,7 +52,23 @@ const KEEPALIVE_EVERY: Duration = Duration::from_millis(50);
 /// Windows 上控件是"按需重绘"的，引擎得自己按帧率泵：`render_tick` 在场景没变时
 /// 几乎零成本（上游 `flutter_scene.matches` 直接返回），所以喷得密不亏。
 #[cfg(target_os = "windows")]
-const WINDOWS_PUMP_EVERY: Duration = Duration::from_millis(8);
+const WINDOWS_PUMP_EVERY: Duration = Duration::from_millis(16);
+
+/// Windows 的循环心跳。和泵同频 → 干净的 ~60Hz，而不是"10ms 醒来、16ms 才泵"的抖动。
+#[cfg(target_os = "windows")]
+const WINDOWS_IDLE: Duration = Duration::from_millis(16);
+
+/// 本平台的心跳间隔（见 [`IDLE`] 与 [`WINDOWS_IDLE`]）。
+fn idle_every() -> Duration {
+    #[cfg(target_os = "windows")]
+    {
+        WINDOWS_IDLE
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        IDLE
+    }
+}
 
 /// 本平台"多久泵一次"（见上面两个常量的说明）。
 fn pump_every() -> Duration {
@@ -315,7 +331,7 @@ impl ThreadActor for ErikaEngine {
     fn run(mut self, mut ctx: ActorContext<Self>) {
         loop {
             // 命令 = 要不要出帧由它说;空闲超时也走一遍(没人要帧就什么都不做)
-            let pump = match ctx.recv_cmd_timeout(IDLE) {
+            let pump = match ctx.recv_cmd_timeout(idle_every()) {
                 Ok(cmd) => self.on_cmd(cmd, &ctx),
                 Err(CmdWait::Timeout) => true,
                 Err(CmdWait::Closed) => break, // stop() 或所有句柄都没了
