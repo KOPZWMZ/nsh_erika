@@ -263,14 +263,14 @@ impl ErikaView {
         generation: u64,
     ) -> Option<FrameCache> {
         let Some(shared) = image.as_shared_texture() else {
-            self.warn_once(
+            self.fail_once(
                 &self.open_failed,
                 "帧载荷不是共享纹理（引擎侧还是旧路径？）",
             );
             return None;
         };
         let Some(device) = d3d_device(dc) else {
-            self.warn_once(
+            self.fail_once(
                 &self.device_failed,
                 "从 D2D 上下文拿不到 D3D11 device —— 这个宿主的合成链路不支持外部纹理",
             );
@@ -279,7 +279,7 @@ impl ErikaView {
         let resource: IDXGIResource = match shared.resource() {
             Some(resource) => resource,
             None => {
-                self.warn_once(
+                self.fail_once(
                     &self.open_failed,
                     "共享纹理不支持 IDXGIResource（没有共享句柄）",
                 );
@@ -291,17 +291,17 @@ impl ErikaView {
             let handle = match resource.GetSharedHandle() {
                 Ok(handle) if !handle.is_invalid() => handle,
                 Ok(_) => {
-                    self.warn_once(&self.open_failed, "GetSharedHandle 返回空句柄");
+                    self.fail_once(&self.open_failed, "GetSharedHandle 返回空句柄");
                     return None;
                 }
                 Err(e) => {
-                    self.warn_once(&self.open_failed, &format!("GetSharedHandle 失败: {e}"));
+                    self.fail_once(&self.open_failed, &format!("GetSharedHandle 失败: {e}"));
                     return None;
                 }
             };
             let mut texture: Option<ID3D11Texture2D> = None;
             if let Err(e) = device.OpenSharedResource(handle, &mut texture) {
-                self.warn_once(
+                self.fail_once(
                     &self.open_failed,
                     &format!("OpenSharedResource 失败（erika 与 NSH 是不是不在同一块 GPU？）: {e}"),
                 );
@@ -315,7 +315,7 @@ impl ErikaView {
             let surface: IDXGISurface = match texture.cast() {
                 Ok(surface) => surface,
                 Err(e) => {
-                    self.warn_once(&self.open_failed, &format!("纹理转 IDXGISurface 失败: {e}"));
+                    self.fail_once(&self.open_failed, &format!("纹理转 IDXGISurface 失败: {e}"));
                     return None;
                 }
             };
@@ -332,7 +332,7 @@ impl ErikaView {
             match dc.CreateBitmapFromDxgiSurface(&surface, Some(&properties)) {
                 Ok(bitmap) => bitmap,
                 Err(e) => {
-                    self.warn_once(
+                    self.fail_once(
                         &self.open_failed,
                         &format!("CreateBitmapFromDxgiSurface 失败: {e}"),
                     );
@@ -359,10 +359,16 @@ impl ErikaView {
         })
     }
 
-    /// 同一条问题只报一次（控件每帧都会调，刷屏没意义）。
-    fn warn_once(&self, flag: &Cell<bool>, message: &str) {
+    /// 记一次失败：日志一次 + **上报引擎**。
+    ///
+    /// 上报很关键：引擎 latch 之后写进 `ErikaStatus::error`，调用者据此知道"这个控件不会出画了"。
+    /// 不报的话（之前就是这样）调用者什么都看不到，而且我们会每帧默默重试 OpenSharedResource。
+    fn fail_once(&self, flag: &Cell<bool>, message: &str) {
         if !flag.replace(true) {
             log::warn!("erika.video: {message}");
+            if let Some(source) = self.source.as_ref() {
+                source.report_video_unavailable(message.to_owned());
+            }
         }
     }
 }

@@ -52,10 +52,6 @@ impl ErikaEngine {
     /// 返回 `Some(文案)` = 这一帧发现**本机出不了帧**，由 `run` 写进状态让应用看到。
     pub(super) fn pump_frame(&mut self) -> Option<String> {
         self.last_rendered = false;
-        // 给控件一个"在不在播"的镜像（决定它续帧的频率，见 `source.rs::Request::playing`）。
-        self.request
-            .playing
-            .store(self.presenter.is_playing(), Ordering::Relaxed);
         // 取一次请求快照：swap(false) = 读并复位，否则引擎会一直以为"被需要"
         if !self.request.want_frame.swap(false, Ordering::AcqRel) {
             return None;
@@ -207,9 +203,6 @@ impl ErikaEngine {
         if !self.presenter.is_playing() {
             return;
         }
-        self.request
-            .playing
-            .store(self.presenter.is_playing(), Ordering::Relaxed);
         self.last_keepalive = Instant::now();
         let time = self.presenter.media_time().as_secs_f64();
         match self.presenter.render_tick(time) {

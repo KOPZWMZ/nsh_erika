@@ -301,15 +301,6 @@ impl ErikaPlayer {
     // ── 三个薄 helper:抵消 `ErikaCmd::Playback(PlaybackCmd::Play)` 这种嵌套噪音,
     //    让下面所有调用点保持扁平的写法(拆类型 ≠ 拆通道,队列还是同一条)。
 
-    /// 立刻更新"在不在播"的镜像（引擎下一轮泵还会再校正一次）。
-    ///
-    /// 为什么要"立刻"：Windows 控件的 `draw` 靠这个镜像决定续帧频率，而播放/暂停命令是
-    /// 异步的（进队列，引擎还没醒）。镜像晚一拍，暂停→播放的过渡就会在"新帧还在路上"
-    /// 的那一刻把续帧循环掐断（实测：画面冻住、声音正常）。
-    fn mark_playing(&self, playing: bool) {
-        self.slot.set_playing(playing);
-    }
-
     /// 发一条生命周期 / 传输命令。
     fn send_playback(&self, cmd: PlaybackCmd) {
         self.send(ErikaCmd::Playback(cmd));
@@ -351,19 +342,16 @@ impl ErikaPlayer {
     ///
     /// 和 erika 自己的 `close()` 的区别:那个是**终态**，我们不碰它。
     pub fn stop(&self) {
-        self.mark_playing(false);
         self.send_playback(PlaybackCmd::Stop);
     }
 
     /// 播放(立即返回)。
     pub fn play(&self) {
-        self.mark_playing(true);
         self.send_playback(PlaybackCmd::Play);
     }
 
     /// 暂停(立即返回)。
     pub fn pause(&self) {
-        self.mark_playing(false);
         self.send_playback(PlaybackCmd::Pause);
     }
 

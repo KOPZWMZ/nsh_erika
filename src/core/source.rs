@@ -230,12 +230,6 @@ impl Default for FrameRequest {
 pub(crate) struct Request {
     /// "有人要画面"的旗标。60Hz 只换位，用原子；引擎 `swap(false)` 读并复位。
     pub(crate) want_frame: AtomicBool,
-    /// 引擎每轮泵刷新一次"在不在播"。
-    ///
-    /// 给控件决定**要不要主动续帧**用：Windows 上 `draw` 是唯一的 tick 源，播放中必须每帧
-    /// 都要一次；暂停时降频轮询（`seek` 后仍能刷新，又不空转）。Linux 的 GTK frame clock
-    /// 无条件敲门，用不到这个。
-    pub(crate) playing: AtomicBool,
     /// 画布 + 导出尺寸 + DPI。低频，用锁。
     pub(crate) frame: Mutex<FrameRequest>,
 }
@@ -244,7 +238,6 @@ impl Request {
     pub(crate) fn new() -> Self {
         Self {
             want_frame: AtomicBool::new(false),
-            playing: AtomicBool::new(false),
             frame: Mutex::new(FrameRequest::default()),
         }
     }
@@ -276,11 +269,6 @@ pub(crate) struct Slot {
 }
 
 impl Slot {
-    /// 更新"在不在播"的镜像（播放/暂停命令下达时由句柄立刻写，引擎下一轮泵再校正）。
-    pub(crate) fn set_playing(&self, playing: bool) {
-        self.request.playing.store(playing, Ordering::Relaxed);
-    }
-
     /// 它的号（控件绑定显示目标用）。
     pub(crate) fn id(&self) -> u64 {
         self.id
@@ -357,15 +345,6 @@ impl ErikaVideoSource {
         let map = REGISTRY.get()?.lock().ok()?;
         let slot = map.get(&id)?.clone();
         Some(Self { slot })
-    }
-
-    /// 现在在不在播（引擎每轮泵刷新的镜像；播放/暂停命令下达时也会立刻写）。
-    ///
-    /// 渲染层目前**不**用它 —— Windows 改成"引擎发布新帧时叫醒宿主"之后就不需要按播放态
-    /// 调续帧频率了。留着给宿主/以后做"暂停降频、只画首帧"之类的优化。
-    #[allow(dead_code)]
-    pub(crate) fn is_playing(&self) -> bool {
-        self.slot.request.playing.load(Ordering::Relaxed)
     }
 
     /// 视频原始宽高比（没打开 / 没有视频轨时为 `None`）。控件用它算内接矩形。
