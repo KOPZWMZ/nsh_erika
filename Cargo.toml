@@ -36,3 +36,5 @@ nsh-platform-windows = { version = "0.5.1", default-features = false }
 # `tests/frame_output.rs` 用 mmap 读 dma-buf 的像素（dma-buf 不支持 read()）：
 # 不做这一步的话，"出帧"只能验到"有个 fd + 尺寸对"，纯黑帧也会过。
 libc = "0.2"
+[workspace]
+members = ["examples/nsh_erika_demo"]

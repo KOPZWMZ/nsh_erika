@@ -32,7 +32,7 @@
 //!   `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json cargo test --test frame_output`
 //! - 完全没有 Vulkan 设备时打印 `SKIP` 并返回（不红 CI），设
 //!   `NSH_ERIKA_REQUIRE_FRAMES=1` 改成硬失败 —— CI 想强制要求"必须能出帧"时用。
-
+#![cfg(target_os = "linux")]
 mod common;
 
 use std::collections::BTreeSet;
@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use common::*;
-use nsh_erika::{ErikaPlayer, ErikaVideoSource, FrameRequest};
+use nsh_erika::{ErikaPlayer, ErikaVideoSource, FrameImage, FrameRequest};
 
 /// 导出的尺寸。故意取小：这条测试只关心"有没有东西"，不在乎分辨率。
 const EXPORT: (u32, u32) = (128, 128);
@@ -71,15 +71,16 @@ fn next_frame(
     export: (u32, u32),
     after: u64,
     timeout: Duration,
-) -> Option<(u64, Arc<erika::DmabufFrame>)> {
+) -> Option<(u64, Arc<FrameImage>)> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         source.request_frame(FrameRequest { export, scale: 1.0 });
         let (generation, frame) = source.frame_snapshot();
         if generation > after
-            && let Some(frame) = frame
+            && let Some(image) = frame
+            && let Some(frame) = image.as_dmabuf()
         {
-            return Some((generation, frame));
+            return Some((generation, image.clone()));
         }
         std::thread::sleep(Duration::from_millis(10));
     }

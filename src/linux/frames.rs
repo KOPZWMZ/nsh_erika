@@ -108,7 +108,7 @@ impl FrameBinder {
             }
             let mut swapped = false;
             if generation != painted.get() {
-                match frame {
+                match frame.as_dmabuf() {
                     Some(frame) => match texture_for(&frame) {
                         Some(texture) => {
                             swapped = true;

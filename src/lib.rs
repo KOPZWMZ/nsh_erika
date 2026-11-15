@@ -103,9 +103,9 @@
 
 // 这个 crate 只有 Linux + Vulkan 的实测路径。换平台要新写一份导出适配,
 // 与其让用户对着一堆上游报错猜,不如在编译期直接说清楚。
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 compile_error!(
-    "nsh-erika 目前只有 Linux + Vulkan（dma-buf）的实测路径。\
+    "nsh-erika 目前只有 Linux + Windows。\
      跨平台移植还没做:每个平台要新写一份导出适配（erika 侧是 Metal / D3D 句柄）。"
 );
 
@@ -117,15 +117,17 @@ pub use linux::native_view::ErikaView;
 mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
-pub use core::engine::{ErikaEvent, ErikaEvents};
-pub use erika::PlayerState;
+#[cfg(target_os = "windows")]
+pub use windows::native_view::ErikaView;
 
+pub use core::engine::{ErikaEvent, ErikaEvents};
 pub use core::player::{
     BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuSnapshot,
     DanmakuText, ErikaDanmaku, ErikaPlayer, ErikaStatus, ErikaSubtitle, ErikaTracks, FilterRule,
     SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
 };
-pub use core::source::{ErikaVideoSource, FrameRequest};
+pub use core::source::{ErikaVideoSource, FrameImage, FrameRequest};
+pub use erika::PlayerState;
 // 句柄的 `call` / `status` 直接暴露 erika 自己的类型:不另造一层。
 pub use erika::MediaRequest;
 /// 只导出**出现在我们公开签名 / 公开字段里**的上游类型 —— 消费者不依赖 erika。
@@ -148,19 +150,13 @@ pub const COMPONENT_NAME: &str = "erika.video";
 pub fn register(components: &nsh_platform_linux::Components) {
     components.register(COMPONENT_NAME, linux::native_view::factory());
 }
-
-/// 把帧源显示到页面里：`view().child(nsh_erika::video(&source))`。
+/// 把 `erika.video` 注册进 `components`。
 ///
-/// [`ErikaVideoSource`] 由 [`ErikaPlayer::new`] 和播放句柄一起交出：句柄留在外面控制，
-/// 帧源交给控件显示。这个函数只是把"必须给一个帧源"变成编译期约束 ——
-/// 内部就是 `native("erika.video").prop("source", source.id())`，因为 NSH 的组件边界
-/// 只能过 JSON（句柄过不去），传的是帧源的号。
-///
-/// 想自己写也行：`native(nsh_erika::COMPONENT_NAME).prop("source", source.id())`，
-/// 只是那样"必须给帧源"就只剩运行期检查。
-#[cfg(target_os = "linux")]
-pub fn video(source: &ErikaVideoSource) -> nsh_core::prelude::NativeView {
-    view_for(source.id())
+/// 调用点是**应用 crate 的根**（`nsh.json` `"rust"` 那个 crate）：nsh 生成的宿主按平台
+/// 去那里找固定名字的入口，不能写在这个库里面。
+#[cfg(target_os = "windows")]
+pub fn register(component: &nsh_platform_windows::Components) {
+    component.register(COMPONENT_NAME, windows::native_view::factory());
 }
 
 impl ErikaPlayer {

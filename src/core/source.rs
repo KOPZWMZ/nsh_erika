@@ -33,7 +33,18 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::core::cmd::{ErikaCmd, RenderCmd};
 use crate::core::player::EngineGuard;
-
+pub enum FrameImage {
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    Dmabuf(erika::DmabufFrame),
+}
+impl FrameImage {
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    pub fn as_dmabuf(&self) -> Option<&erika::DmabufFrame> {
+        match self {
+            Self::Dmabuf(frame) => Some(frame),
+        }
+    }
+}
 /// 帧邮箱：1 格、最后写入者胜。**不通知** —— 渲染层每帧主动拉。
 ///
 /// 为什么不走 actor 的 State/Progress：那两条是 `watch`（通知所有观察者"变了"），
@@ -41,7 +52,7 @@ use crate::core::player::EngineGuard;
 pub(crate) struct FrameSlot {
     // TODO(platform): `erika::DmabufFrame` 只有 Linux 有。跨平台时换成帧载荷抽象
     // （dma-buf fd / Metal 纹理 / D3D 共享纹理），控件的 `FrameBinder` 按平台取。
-    texture: Mutex<Option<Arc<erika::DmabufFrame>>>,
+    texture: Mutex<Option<Arc<FrameImage>>>,
     /// 每写一次 +1。渲染层靠它跳过"同一帧的重复建纹理"。
     generation: AtomicU64,
     /// 视频原始尺寸 `(w << 32) | h`；0 = 还不知道。引擎写、控件每帧读。
@@ -73,7 +84,7 @@ impl FrameSlot {
     }
 
     /// 引擎侧：写入新帧（替换旧的 → 旧的那个随引用计数归零回收，fd 随之关闭）
-    pub(crate) fn publish(&self, frame: Arc<erika::DmabufFrame>) {
+    pub(crate) fn publish(&self, frame: Arc<FrameImage>) {
         let mut g = self.lock();
         *g = Some(frame);
         self.generation.fetch_add(1, Ordering::Release);
@@ -92,12 +103,12 @@ impl FrameSlot {
     }
 
     /// 渲染层：一次拿到「代号 + 帧」
-    pub(crate) fn current(&self) -> (u64, Option<Arc<erika::DmabufFrame>>) {
+    pub(crate) fn current(&self) -> (u64, Option<Arc<FrameImage>>) {
         let g = self.lock();
         (self.generation.load(Ordering::Acquire), g.clone())
     }
 
-    fn lock(&self) -> MutexGuard<'_, Option<Arc<erika::DmabufFrame>>> {
+    fn lock(&self) -> MutexGuard<'_, Option<Arc<FrameImage>>> {
         self.texture.lock().unwrap_or_else(|p| p.into_inner()) // 毒化了继续用
     }
 }
@@ -286,7 +297,7 @@ impl ErikaVideoSource {
     ///
     /// 渲染层每帧调它（`erika.video` 控件的 `FrameBinder`），出帧测试也用它 ——
     /// 这是 `FrameSlot` 唯一的读口，控件以外没人能验证"像素真的出来了"。
-    pub fn frame_snapshot(&self) -> (u64, Option<Arc<erika::DmabufFrame>>) {
+    pub fn frame_snapshot(&self) -> (u64, Option<Arc<FrameImage>>) {
         self.slot.frames.current()
     }
 }

@@ -1,1 +1,1 @@
-mod native_view;
+pub(crate) mod native_view;

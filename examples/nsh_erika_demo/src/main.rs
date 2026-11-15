@@ -21,7 +21,7 @@ fn main() -> impl std::process::Termination {
         size: (1280, 720),
         ..Default::default()
     };
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     nsh_erika::register(&options.components);
     platform::run_app(
         platform::AppSource::Rust(platform::Root::of::<nsh_app_erika_demo::App>()),

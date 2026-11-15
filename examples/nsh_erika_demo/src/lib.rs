@@ -25,7 +25,11 @@ fn register_ui(registry: &mut Registry) {
 fn register_components(components: &nsh_platform_linux::Components) {
     nsh_erika::register(components);
 }
-
+#[cfg(target_os = "windowsx")]
+#[native_components(windows)]
+fn register_components(components: &nsh_platform_windows::Components) {
+    nsh_erika::register(components);
+}
 /// The application's root component。
 ///
 /// **句柄在外面**：`ErikaPlayer::new()` 在这里（页面只跑一次）创建，`player` 留下控制、

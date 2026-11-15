@@ -25,7 +25,6 @@
 //! 平台相关的只有 `export_frame_dmabuf` 那一行：macOS 走 Metal 句柄、Windows 走 D3D 共享纹理。
 //! 拆的时候把 `pump_frame` 分成「决定出不出帧」（留在 core）+「按平台导出」（各平台实现）。
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -66,14 +65,18 @@ impl ErikaEngine {
 
         // TODO(platform): 只有 Linux 的 erika 有 `export_frame_dmabuf`；
         // macOS / Windows 换成各自的句柄导出（Metal / D3D），其余逻辑不动。
+        #[cfg(target_os = "linux")]
         let result = self.presenter.export_frame_dmabuf(width, height, scale);
         // 诊断：各阶段耗时，实现在 `trace.rs`（`NSH_ERIKA_TRACE=1` 才动）。
         if let Some(probe) = self.timings_probe.as_mut() {
             probe.tick(&self.presenter);
-        }
+        };
+        #[cfg(target_os = "linux")]
         match result {
             Ok(Some(frame)) => {
-                self.frames.publish(Arc::new(frame));
+                use crate::core::source::FrameImage;
+                use std::sync::Arc;
+                self.frames.publish(Arc::new(FrameImage::Dmabuf(frame)));
                 self.last_rendered = true;
                 //重置音频泵的计时
                 self.last_keepalive = Instant::now();
@@ -83,6 +86,14 @@ impl ErikaEngine {
             // 没有兜底路径（见 dev_doc §8）：记下来，之后不再尝试导出，
             // 由应用决定整条降级到 NSH 内置 <video>。
             Err(e) => self.latch_video_unavailable(format!("dma-buf 导出失败: {e}")),
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = (width, height, scale);
+            let time = self.presenter.media_time().as_secs_f64();
+            let _ = self.presenter.render_tick(time);
+            self.last_keepalive = Instant::now();
+            None
         }
     }
 
