@@ -187,7 +187,7 @@ impl TickProbe {
         // 第一行只用来建基线（否则会把"开播以来的总数"当成每秒值）。
         let published = if self.primed { self.published } else { 0 };
         eprintln!(
-            "[nsh-erika] gtk tick ≈{:.0}/s paint ≈{:.0}/s frames ≈{:.0}/s maxgap={:.0}ms",
+            "[nsh-erika] tick ≈{:.0}/s paint ≈{:.0}/s frames ≈{:.0}/s maxgap={:.0}ms",
             per_second(self.ticks.into()),
             per_second(self.paints.into()),
             per_second(published),

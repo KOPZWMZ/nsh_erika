@@ -111,6 +111,12 @@ pub(crate) struct FrameSlot {
     texture: Mutex<Option<Arc<FrameImage>>>,
     /// 每写一次 +1。渲染层靠它跳过"同一帧的重复建纹理"。
     generation: AtomicU64,
+    /// 有新帧时叫醒宿主（Windows 的控件在这里注册 `ComponentContext::redraw`）。
+    ///
+    /// Linux 不需要：GTK frame clock 每帧自己敲门，控件按 tick 拉就行。
+    /// Windows 的 `draw` 是**按需重绘**的，没有 frame clock —— 控件自己续帧只能二选一：
+    /// 空转（实测把整窗重绘推到 4400/s）或者断链。所以"发布了新帧"必须由**发布方**推给宿主。
+    waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// 视频原始尺寸 `(w << 32) | h`；0 = 还不知道。引擎写、控件每帧读。
     ///
     /// 放这里而不是 `ErikaStatus`：它是**帧的元信息**，控件每帧都要，而状态通道的语义是
@@ -123,6 +129,7 @@ impl FrameSlot {
         Self {
             texture: Mutex::new(None),
             generation: AtomicU64::new(0),
+            waker: Mutex::new(None),
             video_size: AtomicU64::new(0),
         }
     }
@@ -141,16 +148,44 @@ impl FrameSlot {
 
     /// 引擎侧：写入新帧（替换旧的 → 旧的那个随引用计数归零回收，fd 随之关闭）
     pub(crate) fn publish(&self, frame: Arc<FrameImage>) {
-        let mut g = self.lock();
-        *g = Some(frame);
-        self.generation.fetch_add(1, Ordering::Release);
+        {
+            let mut g = self.lock();
+            *g = Some(frame);
+            self.generation.fetch_add(1, Ordering::Release);
+        }
+        self.wake_host();
     }
 
     /// 两侧都能调：open / stop 时作废当前帧
     pub(crate) fn clear(&self) {
-        let mut g = self.lock();
-        *g = None;
-        self.generation.fetch_add(1, Ordering::Release);
+        {
+            let mut g = self.lock();
+            *g = None;
+            self.generation.fetch_add(1, Ordering::Release);
+        }
+        // 画面被作废了（open / stop）：也认宿主重绘一次，把上一张撤掉。
+        self.wake_host();
+    }
+
+    /// 注册"有新帧时叫醒宿主"的回调（只有 Windows 的控件注册；Linux 走 GTK frame clock）。
+    #[allow(dead_code)]
+    pub(crate) fn set_waker(&self, waker: Arc<dyn Fn() + Send + Sync>) {
+        *self.waker.lock().unwrap_or_else(|p| p.into_inner()) = Some(waker);
+    }
+
+    /// 摘掉叫醒回调（控件卸载时）。不摘的话回调会一直攥着宿主的 `ComponentContext`，
+    /// 而播放句柄可能比视图活得久。
+    #[allow(dead_code)]
+    pub(crate) fn clear_waker(&self) {
+        *self.waker.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+
+    /// 叫醒宿主。**不在持锁时调**：回调会进宿主的 UI 线程，别和数据锁绞在一起。
+    fn wake_host(&self) {
+        let waker = self.waker.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(waker) = waker {
+            waker();
+        }
     }
 
     /// 现在槽里有没有帧（零成本，不 clone）。
@@ -324,9 +359,10 @@ impl ErikaVideoSource {
         Some(Self { slot })
     }
 
-    /// 现在在不在播（引擎每轮泵刷新的镜像，给控件决定续帧节奏用）。
+    /// 现在在不在播（引擎每轮泵刷新的镜像；播放/暂停命令下达时也会立刻写）。
     ///
-    /// 只有 Windows 的控件用（Linux 那边的 tick 来自 GTK frame clock，不需要知道播没播）。
+    /// 渲染层目前**不**用它 —— Windows 改成"引擎发布新帧时叫醒宿主"之后就不需要按播放态
+    /// 调续帧频率了。留着给宿主/以后做"暂停降频、只画首帧"之类的优化。
     #[allow(dead_code)]
     pub(crate) fn is_playing(&self) -> bool {
         self.slot.request.playing.load(Ordering::Relaxed)
@@ -362,6 +398,21 @@ impl ErikaVideoSource {
             .engine
             .handle
             .send_cmd(ErikaCmd::VideoUnavailable(reason));
+    }
+
+    /// 注册"有新帧时叫醒宿主"的回调。
+    ///
+    /// Windows 的控件在拿到 `source` 时注册（`ComponentContext` 是 `Send + Sync`，可以从
+    /// 引擎线程调 `redraw()`）；Linux 的控件不注册 —— 它有 GTK frame clock。
+    #[allow(dead_code)]
+    pub(crate) fn set_host_waker(&self, waker: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        self.slot.frames.set_waker(waker);
+    }
+
+    /// 摘掉叫醒回调（控件卸载 / 换绑时）。
+    #[allow(dead_code)]
+    pub(crate) fn clear_host_waker(&self) {
+        self.slot.frames.clear_waker();
     }
 
     /// 现在有没有画面可画（**零成本、非阻塞**）。

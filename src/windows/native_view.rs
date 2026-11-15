@@ -56,9 +56,6 @@ use nsh_platform_windows::{
 use crate::core::source::export_size;
 use crate::{ErikaVideoSource, FrameImage, FrameRequest};
 
-/// 暂停时的续帧轮询间隔。播放中不用它（每帧都要）。
-const PAUSED_POLL: Duration = Duration::from_millis(250);
-
 /// 注册用的工厂。
 pub(crate) fn factory() -> ComponentFactory {
     Rc::new(|cx: ComponentContext| -> Box<dyn NativeComponent> { Box::new(ErikaView::new(cx)) })
@@ -79,8 +76,6 @@ pub struct ErikaView {
     open_failed: Cell<bool>,
     /// "第一帧"日志只打一次。
     first_frame: Cell<bool>,
-    /// 上一次主动续帧的时刻（暂停时按 `PAUSED_POLL` 轮询）。
-    last_redraw: Cell<Instant>,
     /// `NSH_ERIKA_TRACE=1`：每秒一行 tick/paint/frames 统计（和 Linux 共用 `TickProbe`）。
     probe: RefCell<Option<crate::core::trace::TickProbe>>,
 }
@@ -108,8 +103,16 @@ impl ErikaView {
             device_failed: Cell::new(false),
             open_failed: Cell::new(false),
             first_frame: Cell::new(false),
-            last_redraw: Cell::new(Instant::now()),
             probe: RefCell::new(crate::core::trace::TickProbe::from_env()),
+        }
+    }
+}
+
+impl Drop for ErikaView {
+    fn drop(&mut self) {
+        // 控件卸载：把"叫醒我"的回调摘掉，别让帧槽一直攥着宿主上下文。
+        if let Some(source) = self.source.take() {
+            source.clear_host_waker();
         }
     }
 }
@@ -157,7 +160,6 @@ impl NativeComponent for ErikaView {
 
         // 摆位：视频比例内接控件、居中，多出来的留黑（和 Linux 的 ContentFit::Contain 一致）。
         // 窗口每次重绘都要重画这一帧（NSH 画的是整棵场景树），所以这里不是"新帧才画"。
-        let waiting = cache.is_none();
         if let Some(current) = cache.as_ref() {
             let dest = fit_rect(size, current.size);
             // SAFETY: 调用 NSH 传进来的活上下文；位图与它建在同一个 device 上。
@@ -174,24 +176,16 @@ impl NativeComponent for ErikaView {
         }
         drop(cache);
 
-        // 自续帧：`draw` 是 Windows 上**唯一**的 tick 源（Linux 那边是 GTK frame clock
-        // 无条件敲门），所以播放中必须每帧都要一次 —— 否则引擎没人唤醒，画面停住。
+        // 这里**不再自己续帧**。`draw` 是 NSH 按需调用的（Windows 上没有 frame clock），
+        // 从里面 `redraw()` 就是"自己叫自己"，实测把整窗重绘推到 4400 次/秒、引擎空转
+        // 4000+ tick/s；而不 `redraw()` 又会让链条断掉（暂停时连 seek 都刷不出来）。
         //
-        // ⚠️ 别只在"这一帧拿到新画面"时才续帧：NSH 的重绘频率（~vsync）比视频帧率快，
-        // 只要有一次 `draw` 早于引擎发布，循环就自己掐断了（实测：出第一帧后冻住，
-        // 点一下暂停/播放才跳一帧）。
-        //
-        // 暂停时按 `PAUSED_POLL` 轮询：`seek` / 换轨之后画面仍能刷新，又不空转。
-        let now = Instant::now();
+        // 正确分工：**谁产生新帧，谁叫醒宿主** —— 引擎发布时通过 `FrameSlot` 的 waker
+        // 调一次 `ComponentContext::redraw()`（见 `source.rs::FrameSlot::wake_host`）。
         if let Some(probe) = self.probe.borrow_mut().as_mut()
-            && probe.tick(now, generation, painted)
+            && probe.tick(Instant::now(), generation, painted)
         {
-            probe.print(now);
-        }
-        let poll_due = now.duration_since(self.last_redraw.get()) >= PAUSED_POLL;
-        if painted || waiting || source.is_playing() || poll_due {
-            self.last_redraw.set(now);
-            self.cx.redraw();
+            probe.print(Instant::now());
         }
     }
 
@@ -207,7 +201,12 @@ impl NativeComponent for ErikaView {
         self.open_failed.set(false);
         match id.and_then(ErikaVideoSource::resolve) {
             Some(source) => {
+                // 有新帧就让引擎叫我们一声：`ComponentContext` 是 `Send + Sync` 的，
+                // 引擎线程可以直接 `redraw()`（Windows 没有 frame clock，这是唯一不空转的驱动方式）。
+                let cx = self.cx.clone();
+                source.set_host_waker(std::sync::Arc::new(move || cx.redraw()));
                 self.source = Some(source);
+                // 立刻画一次 → `draw` 里 `request_frame` 发第一个 Wake，引擎才开始出帧。
                 self.cx.redraw();
             }
             None => {

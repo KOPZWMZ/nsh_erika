@@ -46,6 +46,26 @@ const IDLE: Duration = Duration::from_millis(10);
 /// 上游 `DEFAULT_AUDIO_LEAD_TIME` 是 120ms(音频领先时钟 120ms 就够),50ms 一次留了两倍余量。
 const KEEPALIVE_EVERY: Duration = Duration::from_millis(50);
 
+/// Windows 的泵间隔：**比 Linux 密得多**，因为 Windows 没有宿主 tick 来"要帧"。
+///
+/// Linux 上 GTK frame clock 每帧敲一次控件 tick → `request_frame` → 引擎被叫醒；
+/// Windows 上控件是"按需重绘"的，引擎得自己按帧率泵：`render_tick` 在场景没变时
+/// 几乎零成本（上游 `flutter_scene.matches` 直接返回），所以喷得密不亏。
+#[cfg(target_os = "windows")]
+const WINDOWS_PUMP_EVERY: Duration = Duration::from_millis(8);
+
+/// 本平台"多久泵一次"（见上面两个常量的说明）。
+fn pump_every() -> Duration {
+    #[cfg(target_os = "windows")]
+    {
+        WINDOWS_PUMP_EVERY
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        KEEPALIVE_EVERY
+    }
+}
+
 /// 引擎发给 UI 的事件。**只是"去重新拉一次状态"的通知**,不带数据 ——
 /// 状态本身在 actor 的 `watch` 里,事件只负责把 UI 叫醒。
 #[derive(Clone, Debug)]

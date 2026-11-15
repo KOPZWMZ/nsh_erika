@@ -32,7 +32,7 @@ use std::time::Instant;
 
 use actor_lite::ActorContext;
 
-use super::{ErikaEngine, KEEPALIVE_EVERY};
+use super::ErikaEngine;
 use crate::core::cmd::RenderCmd;
 
 impl ErikaEngine {
@@ -194,7 +194,7 @@ impl ErikaEngine {
     ///
     /// 只在播放中做 —— 暂停时 `render_tick` 泵不出任何音频,白花合成的时间。
     pub(super) fn keepalive_pump(&mut self) {
-        if self.last_keepalive.elapsed() < KEEPALIVE_EVERY {
+        if self.last_keepalive.elapsed() < super::pump_every() {
             return;
         } // 纯算术
         if !self.presenter.player().has_open_media() {
@@ -210,7 +210,13 @@ impl ErikaEngine {
         let time = self.presenter.media_time().as_secs_f64();
         match self.presenter.render_tick(time) {
             // 边沿标记：失败记一次，成功后复位，下次再坏才会再报。
-            Ok(_) => self.keepalive_failed = false,
+            Ok(_) => {
+                self.keepalive_failed = false;
+                // Windows：这条泵也会产出新画面（没有人 tick 要帧的时代替了控件那条），
+                // 所以发布 + 叫醒宿主要在这里做，否则画面又只能等下一次交互才动。
+                #[cfg(target_os = "windows")]
+                self.publish_win_frame();
+            }
             Err(e) => {
                 if !self.keepalive_failed {
                     self.keepalive_failed = true;
