@@ -158,7 +158,6 @@ impl ErikaEngine {
                     want.1
                 );
                 self.surface_metrics = Some(want);
-                self.published_handle = None; // 尺寸变了，上一张快照作废
                 None
             }
             Err(e) => Some(format!("Windows 出图面挂不上: {e}")),
@@ -180,11 +179,16 @@ impl ErikaEngine {
             return;
         };
         let frame = unsafe { SharedTexture::from_owned_raw(raw) };
-        if self.published_handle == Some(raw as usize) {
-            // frame 在这里 drop → Release 掉这一轮多拿的那一次。
+        let same = self
+            .frames
+            .current()
+            .1
+            .as_deref()
+            .and_then(FrameImage::as_shared_texture)
+            .is_some_and(|head| head.raw() == raw);
+        if same {
             return;
         }
-        self.published_handle = Some(raw as usize);
         self.frames
             .publish(Arc::new(FrameImage::SharedTexture(frame)));
         self.last_rendered = true;

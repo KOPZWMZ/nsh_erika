@@ -41,8 +41,9 @@ fn register_components_window(components: &PlatformComponents) {
 #[component]
 pub fn App() -> impl IntoElement {
     let builtin = std::env::var_os("NSH_PLAYER_BUILTIN").is_some();
-    let src = std::env::var("NSH_ERIKA_SRC").unwrap_or_else(|_| "cache/video.mkv".to_string());
-    let danmaku_uri = std::env::var("DMK").unwrap_or_else(|_| "cache/danmaku.json".to_string());
+    let src = std::env::var("NSH_ERIKA_SRC").unwrap_or_else(|_| "../../media/tiny.mkv".to_string());
+    let danmaku_uri =
+        std::env::var("DMK").unwrap_or_else(|_| "../../media/danmaku.json".to_string());
     let paused = signal(false);
 
     // 1) 外部创建句柄 + 打开媒体
