@@ -443,38 +443,15 @@ fn dpi_scale(dc: &ID2D1DeviceContext) -> f64 {
     }
 }
 
-/// 视频尺寸在控件里的内接矩形（D2D 的矩形，单位是**逻辑点**）。
+/// 视频在控件里的摆放矩形（D2D 矩形，单位**逻辑点**）：内接 + 居中，多出来的留黑。
 fn fit_rect(size: (f32, f32), video: (u32, u32)) -> D2D_RECT_F {
-    let (width, height) = size;
-    let aspect = if video.0 > 0 && video.1 > 0 {
-        video.0 as f32 / video.1 as f32
-    } else {
-        return D2D_RECT_F {
-            left: 0.0,
-            top: 0.0,
-            right: width,
-            bottom: height,
-        };
-    };
-    if width <= 0.0 || height <= 0.0 {
-        return D2D_RECT_F {
-            left: 0.0,
-            top: 0.0,
-            right: width,
-            bottom: height,
-        };
-    }
-    let (draw_width, draw_height) = if width / height > aspect {
-        (height * aspect, height)
-    } else {
-        (width, width / aspect)
-    };
-    let left = (width - draw_width) / 2.0;
-    let top = (height - draw_height) / 2.0;
+    let aspect = (video.0 > 0 && video.1 > 0).then(|| video.0 as f32 / video.1 as f32);
+    let (width, height) = crate::core::source::fit_size(aspect, size.0, size.1);
+    let (left, top) = ((size.0 - width) / 2.0, (size.1 - height) / 2.0);
     D2D_RECT_F {
         left,
         top,
-        right: left + draw_width,
-        bottom: top + draw_height,
+        right: left + width,
+        bottom: top + height,
     }
 }

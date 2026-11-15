@@ -79,27 +79,34 @@ impl FrameImage {
     }
 }
 
-/// 视频宽高比在画布里的**内接矩形**，单位是物理像素。
+/// 把 `aspect` 的矩形**内接**到 `width × height` 的框里，返回内接尺寸（不居中）。
 ///
-/// 两个平台共用同一套几何（Linux 的控件 tick、Windows 的 `draw`），所以放在 core：
+/// 全库唯一的"按比例内接"公式：引擎用它算导出尺寸，Windows 控件用它算 D2D 摆放矩形
+/// （`fit_rect` 只在这之上多了"居中"一步）。**别再就地写第三份** —— 两份就够漂了。
 ///
-/// - 出帧尺寸只覆盖视频区域，少合成/少搬运一大截像素（竖版控件里放 16:9 的片子能省一半以上）；
-/// - erika 拿它当 libass 的 `PlayRes`，字幕按它排版后不会再被 aspect-fit 拉伸 ——
-///   非全屏时"字幕变扁"那个 bug 顺带没了。
-///
-/// 宽高比还不知道时（轨道还没 probe 出来）先用整块画布，出第一帧之后再收窄。
-pub(crate) fn export_size(aspect: Option<f32>, width: u32, height: u32) -> (u32, u32) {
+/// `aspect` 未知/非法、或任一边 ≤ 0 时整框返回（不做除法）。
+pub(crate) fn fit_size(aspect: Option<f32>, width: f32, height: f32) -> (f32, f32) {
     let Some(aspect) = aspect.filter(|aspect| aspect.is_finite() && *aspect > 0.0) else {
         return (width, height);
     };
-    // 画布比视频宽 → 高度顶满、左右留边；否则宽度顶满、上下留边。
-    if width as f32 / height as f32 > aspect {
-        let width = ((height as f32) * aspect).round() as u32;
-        (width.max(1), height)
-    } else {
-        let height = ((width as f32) / aspect).round() as u32;
-        (width, height.max(1))
+    if width <= 0.0 || height <= 0.0 {
+        return (width, height);
     }
+    // 框比视频宽 → 高度顶满、左右留边；否则宽度顶满、上下留边。
+    if width / height > aspect {
+        (height * aspect, height)
+    } else {
+        (width, width / aspect)
+    }
+}
+
+/// 引擎出帧尺寸（物理像素，取整）。
+pub(crate) fn export_size(aspect: Option<f32>, width: u32, height: u32) -> (u32, u32) {
+    let (width, height) = fit_size(aspect, width as f32, height as f32);
+    (
+        (width.round() as u32).max(1),
+        (height.round() as u32).max(1),
+    )
 }
 
 /// 帧邮箱：1 格、最后写入者胜。**不通知** —— 渲染层每帧主动拉。
