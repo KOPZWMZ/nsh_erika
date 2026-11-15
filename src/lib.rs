@@ -112,7 +112,7 @@
 //! - `core/source.rs`：`FrameImage` 只有 Linux 的 `Dmabuf` 变体，Windows 的
 //!   `SharedTexture` 等第二步；`as_dmabuf()` 本身也只在 Linux 编译；
 //! - `core/engine/render.rs`：Windows 那一支现在只泵音频/时钟，不出帧；
-//! - `core/trace.rs`：`GtkTickProbe` 是 GTK 专用，Windows 的 tick 统计还没写。
+//! - `core/trace.rs`：`TickProbe` 两平台共用（tick 来源不同，统计口径一样）。
 
 #![warn(missing_docs)]
 

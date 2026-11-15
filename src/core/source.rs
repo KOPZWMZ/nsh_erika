@@ -241,6 +241,11 @@ pub(crate) struct Slot {
 }
 
 impl Slot {
+    /// 更新"在不在播"的镜像（播放/暂停命令下达时由句柄立刻写，引擎下一轮泵再校正）。
+    pub(crate) fn set_playing(&self, playing: bool) {
+        self.request.playing.store(playing, Ordering::Relaxed);
+    }
+
     /// 它的号（控件绑定显示目标用）。
     pub(crate) fn id(&self) -> u64 {
         self.id

@@ -81,6 +81,8 @@ pub struct ErikaView {
     first_frame: Cell<bool>,
     /// 上一次主动续帧的时刻（暂停时按 `PAUSED_POLL` 轮询）。
     last_redraw: Cell<Instant>,
+    /// `NSH_ERIKA_TRACE=1`：每秒一行 tick/paint/frames 统计（和 Linux 共用 `TickProbe`）。
+    probe: RefCell<Option<crate::core::trace::TickProbe>>,
 }
 
 /// 一张已经能画的帧：打开的纹理 + 包在它上面的 D2D 位图。
@@ -107,6 +109,7 @@ impl ErikaView {
             open_failed: Cell::new(false),
             first_frame: Cell::new(false),
             last_redraw: Cell::new(Instant::now()),
+            probe: RefCell::new(crate::core::trace::TickProbe::from_env()),
         }
     }
 }
@@ -180,6 +183,11 @@ impl NativeComponent for ErikaView {
         //
         // 暂停时按 `PAUSED_POLL` 轮询：`seek` / 换轨之后画面仍能刷新，又不空转。
         let now = Instant::now();
+        if let Some(probe) = self.probe.borrow_mut().as_mut()
+            && probe.tick(now, generation, painted)
+        {
+            probe.print(now);
+        }
         let poll_due = now.duration_since(self.last_redraw.get()) >= PAUSED_POLL;
         if painted || waiting || source.is_playing() || poll_due {
             self.last_redraw.set(now);
