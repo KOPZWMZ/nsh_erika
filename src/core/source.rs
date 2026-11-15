@@ -25,12 +25,12 @@
 //!
 //! - Linux：`Dmabuf(erika::DmabufFrame)`，即 `export_frame_dmabuf` 的产物（一个 fd +
 //!   stride/offset/尺寸）；
-//! - Windows：留待第二步 —— erika 给的是 D3D11 共享纹理（`*mut c_void` 的 `IUnknown`），
-//!   见 `dev_doc/nsh-erika-architecture.md` §5.6/§5.9。
+//! - Windows：`SharedTexture`，erika 发布的 D3D11 共享纹理（`*mut c_void` 的 `IUnknown`，
+//!   见 `dev_doc/nsh-erika-architecture.md` §5.7.1）。
 //!
 //! 控件侧按平台各取各的（Linux 在 `linux/frames.rs` 里 `as_dmabuf()` → `GdkDmabufTexture`）。
 //!
-//! 所有待拆点用 `rg 'TODO\(platform\)' src` 一次列全。
+//! 两边的变体各自只在对应平台编译，帧槽本身没有平台分支。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -109,10 +109,14 @@ pub(crate) fn export_size(aspect: Option<f32>, width: u32, height: u32) -> (u32,
     )
 }
 
-/// 帧邮箱：1 格、最后写入者胜。**不通知** —— 渲染层每帧主动拉。
+/// 帧邮箱：1 格、最后写入者胜。
 ///
-/// 为什么不走 actor 的 State/Progress：那两条是 `watch`（通知所有观察者"变了"），
-/// 而帧是**取货**——消费者每帧来拉，从不需要通知。
+/// 不走 actor 的 State/Progress：那两条是 `watch`（通知所有观察者"变了"），而帧是
+/// **取货** —— 消费者每帧来拉，不需要"状态广播"。
+///
+/// 但"有货了"这**一件事**要通知：[`FrameSlot::waker`]。Linux 上没人注册（GTK frame clock
+/// 每帧自己来取）;Windows 上控件注册 `ComponentContext::redraw()`,于是发布一帧就重绘一帧
+/// —— 没有它,`draw` 是按需调用的,画面就只能等下一次交互才更新。
 pub(crate) struct FrameSlot {
     // 载荷是平台无关的 `FrameImage`：Linux 装 dma-buf，其它平台的变体等各自接上。
     texture: Mutex<Option<Arc<FrameImage>>>,
@@ -175,19 +179,22 @@ impl FrameSlot {
     }
 
     /// 注册"有新帧时叫醒宿主"的回调（只有 Windows 的控件注册；Linux 走 GTK frame clock）。
-    #[allow(dead_code)]
+    #[cfg(target_os = "windows")]
     pub(crate) fn set_waker(&self, waker: Arc<dyn Fn() + Send + Sync>) {
         *self.waker.lock().unwrap_or_else(|p| p.into_inner()) = Some(waker);
     }
 
     /// 摘掉叫醒回调（控件卸载时）。不摘的话回调会一直攥着宿主的 `ComponentContext`，
     /// 而播放句柄可能比视图活得久。
-    #[allow(dead_code)]
+    #[cfg(target_os = "windows")]
     pub(crate) fn clear_waker(&self) {
         *self.waker.lock().unwrap_or_else(|p| p.into_inner()) = None;
     }
 
     /// 叫醒宿主。**不在持锁时调**：回调会进宿主的 UI 线程，别和数据锁绞在一起。
+    ///
+    /// 这个方法**两平台都编译**：`publish` / `clear` 都会调它，没插头时是个空操作
+    /// （Linux 永远没插头 —— `set_waker` 那对方法是 Windows 专属的）。
     fn wake_host(&self) {
         let waker = self.waker.lock().unwrap_or_else(|p| p.into_inner()).clone();
         if let Some(waker) = waker {
@@ -390,13 +397,13 @@ impl ErikaVideoSource {
     ///
     /// Windows 的控件在拿到 `source` 时注册（`ComponentContext` 是 `Send + Sync`，可以从
     /// 引擎线程调 `redraw()`）；Linux 的控件不注册 —— 它有 GTK frame clock。
-    #[allow(dead_code)]
+    #[cfg(target_os = "windows")]
     pub(crate) fn set_host_waker(&self, waker: std::sync::Arc<dyn Fn() + Send + Sync>) {
         self.slot.frames.set_waker(waker);
     }
 
     /// 摘掉叫醒回调（控件卸载 / 换绑时）。
-    #[allow(dead_code)]
+    #[cfg(target_os = "windows")]
     pub(crate) fn clear_host_waker(&self) {
         self.slot.frames.clear_waker();
     }

@@ -128,7 +128,7 @@ impl FrameBinder {
                             picture.set_paintable(Some(&texture));
                         }
                         // 导入失败（GSK 后端接不了 dma-buf）：没有兜底路径。
-                        // 记下来（下一帧直接 Break）并告诉引擎，由应用决定降级到内置 <video>。
+                        // 记下来（下一帧直接 Break）并告诉引擎；怎么办由调用者决定。
                         None => {
                             if !import_failed.replace(true) {
                                 log::warn!(

@@ -1,7 +1,7 @@
 //! `erika.video`：只要画面、不带控制条的原生控件（Linux/GTK 版）。
 //!
 //! 这是 **Linux 适配层**：`gtk::Picture` + `FrameBinder`。Windows 的那份在
-//! `src/windows/native_view.rs`（`draw(&ID2D1DeviceContext, size)`，目前是空壳）。
+//! `src/windows/native_view.rs`（`draw(&ID2D1DeviceContext, size)`，已跑通）。
 //! `lib.rs` 用 `backend` 别名按平台指过来，外面只看见一个 `ErikaView`。
 //!
 //! 它就是一个 `gtk::Picture`：帧由引擎线程导出成线性 dma-buf，tick 回调里导入成

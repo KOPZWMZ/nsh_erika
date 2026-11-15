@@ -203,7 +203,7 @@ impl ErikaEngine {
             ErikaCmd::Danmaku(c) => self.on_danmaku(c),
             ErikaCmd::Subtitle(c) => self.on_subtitle(c),
             ErikaCmd::Call(job) => job(&mut self.presenter), // 逃生舱:不代捕错误
-            // 控件侧导入失败：记下来（应用据此降级到内置 <video>），之后不再尝试出帧。
+            // 控件侧判断本机出不了帧：记下来（写进 `status.error`，由调用者决定），之后不再尝试出帧。
             // 错误写进 `self.error` 后由下面统一的 `publish` 带出去。
             ErikaCmd::VideoUnavailable(reason) => {
                 if let Some(reason) = self.latch_video_unavailable(reason) {

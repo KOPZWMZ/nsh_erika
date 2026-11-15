@@ -60,18 +60,19 @@
 //! `GdkDmabufTexture` 直接导入交给 `gtk::Picture`。我们这边不建 Vulkan 设备，也不需要
 //! 导入外部纹理。
 //!
-//! **Windows**：**还没接上**。目标是 erika 的 D3D11 共享纹理快照 → 在控件的
-//! `draw(&ID2D1DeviceContext, size)` 里 `DrawBitmap`（NSH 每帧调 `draw`，所以还是拉模型，
-//! 不需要 `attach_surface`）。在那之前 `pump_frame` 在 Windows 上只泵音频/时钟、不出帧，
-//! 控件是空壳 —— 见 dev_doc `nsh-erika-architecture.md` §5.9。
+//! **Windows**：erika 没有 dma-buf 那种导出接口，走它现成的 Flutter texture 出口 ——
+//! 引擎线程 `attach_surface(FlutterTexture{尺寸})` 一次，之后每轮 `render_tick` 让 erika
+//! 渲染进离屏面并发布一张 `MISC_SHARED` 快照；控件在 `draw(&ID2D1DeviceContext, size)` 里
+//! `OpenSharedResource` 打开同一块显存 → `CreateBitmapFromDxgiSurface` → `DrawBitmap`。
+//! 整条链不过 CPU（代价是上游每帧一次 `CopyResource` + 一次 GPU 同步等待，见 dev_doc §5.7.1）。
 //!
 //! **每个平台只有一条路**：没有 CPU 回读兜底（`capture_frame_rgba` 是截图 API，按设计不启动
 //! 音频、也不计入渲染帧，见 dev_doc §8）。宿主导不进来就没有画面。
 //!
-//! 导出或导入失败时，原因会写进 [`ErikaStatus::error`]（`player.status().error` /
-//! [`ErikaPlayer::last_error`]）并且**之后不再尝试导出**；应用据此整条降级到 NSH 内置
-//! `<video>`（GStreamer）。`ErikaPlayer::new()` 本身就失败（没有可用的 Vulkan 设备）时
-//! 是同步 `Err`，那时压根别建控件。
+//! 导出 / 导入 / 拿不到共享纹理时，原因会写进 [`ErikaStatus::error`]（`player.status().error` /
+//! [`ErikaPlayer::last_error`]）并且**之后不再尝试**。这个库只负责**上报** —— 要不要换实现、
+//! 换哪个、怎么提示用户，都由调用者决定（它不知道宿主还有没有别的播放器可用）。
+//! `ErikaPlayer::new()` 本身就失败时是同步 `Err`，那时压根别建控件。
 //!
 //! ## 用法：句柄在外面，控件只显示
 //!
@@ -100,28 +101,27 @@
 //! | 平台 | 出帧 | 控件 | 状态 |
 //! |---|---|---|---|
 //! | Linux | erika 导出线性 dma-buf → `GdkDmabufTexture` → `gtk::Picture` | `linux/native_view.rs` | 跑通（含 VA-API 直通） |
-//! | Windows | 计划：D3D11 共享纹理 → D2D `DrawBitmap` | `windows/native_view.rs` | **只编过**，控件是空壳，画面未接 |
+//! | Windows | D3D11 共享纹理 → `OpenSharedResource` → D2D `DrawBitmap` | `windows/native_view.rs` | 跑通（硬解 + 弹幕） |
 //! | macOS / Android | 未做 | — | `compile_error!` 在编译期挡住 |
 //!
-//! 帧载荷抽象成 [`FrameImage`]（各平台一份变体，目前只有 Linux 的 `Dmabuf`）；
+//! 帧载荷抽象成 [`FrameImage`]（各平台一份变体：Linux 的 `Dmabuf`、Windows 的 `SharedTexture`）；
 //! 帧槽与 `pump_frame` 里"要不要出帧 / 保活泵"的策略是平台无关的，分平台的只有两处：
 //! **怎么导出这一帧**、**怎么把它画到宿主上**。
 //!
-//! 还耦合的点用 `rg 'TODO\(platform\)' src` 一次列全：
+//! 分平台的点就这几处（`TODO(platform)` 已经清干净了）：
 //!
-//! - `core/source.rs`：`FrameImage` 只有 Linux 的 `Dmabuf` 变体，Windows 的
-//!   `SharedTexture` 等第二步；`as_dmabuf()` 本身也只在 Linux 编译；
-//! - `core/engine/render.rs`：Windows 那一支现在只泵音频/时钟，不出帧；
+//! - `core/source.rs`：`as_dmabuf()` / `as_shared_texture()` 各自只在对应平台编译；
+//! - `core/engine/render.rs`：Windows 那一支必须先挂出图面才出帧（`ensure_win_surface`）；
 //! - `core/trace.rs`：`TickProbe` 两平台共用（tick 来源不同，统计口径一样）。
 
 #![warn(missing_docs)]
 
-// 这个 crate 只有 Linux + Vulkan 的实测路径。换平台要新写一份导出适配,
+// Linux 和 Windows 各有一条跑通的出帧路径；其它平台还没有适配,
 // 与其让用户对着一堆上游报错猜,不如在编译期直接说清楚。
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 compile_error!(
-    "nsh-erika 目前只有 Linux + Windows。\
-     跨平台移植还没做:每个平台要新写一份导出适配（erika 侧是 Metal / D3D 句柄）。"
+    "nsh-erika 目前只有 Linux（dma-buf）和 Windows（D3D11 共享纹理）两条出帧路径。\
+     macOS（Metal 纹理）和 Android（ANativeWindow）还没做。"
 );
 
 mod core;

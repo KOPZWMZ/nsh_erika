@@ -54,7 +54,7 @@ pub fn App() -> impl IntoElement {
                 if !src.is_empty() {
                     player.open(nsh_erika::MediaRequest::new(src.clone()));
                     player.play();
-                    // player.danmaku().add_track(danmaku_uri, "bilibili")
+                    player.danmaku().add_track(danmaku_uri, "bilibili")
                 }
                 handles = Some(player);
             }

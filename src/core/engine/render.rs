@@ -16,16 +16,18 @@
 //! **一次真 seek**(退关键帧 + preroll + flush 音频环,实测 200–300ms、丢几十帧)。
 //! 窗口可见性抖动时它和"要不要出帧"互相触发,就是连续爆音(见 dev_doc §7)。
 //!
-//! 出帧**只有一条路**:erika 导出线性 dma-buf,控件用 `GdkDmabufTexture` 导入 ——
-//! 我们这边一个 Vulkan 设备都不用建。没有 CPU 回读兜底(见 dev_doc §8):导出失败就把
-//! 文案写进状态(`ErikaStatus::error`,应用据此降级到内置 `<video>`)、之后**不再尝试导出**,
-//! 上一张继续显示;音频改由保活泵继续喂。
+//! **每个平台一条路**，都不经过 CPU 回读（见 dev_doc §8）：
 //!
-//! TODO(platform): 上面写的是 **Linux 的形状**。「要不要出帧 / 保活泵」这套策略是跨平台的，
-//! 平台相关的只有"怎么导出这一帧"：Linux 是 `export_frame_dmabuf`，Windows 是 D3D11 共享纹理
-//! （`windows_flutter_texture_iunknown`，见 dev_doc `nsh-erika-architecture.md` §5.6/§5.9）。
-//! `pump_frame` 已经按这个线分成两支：Linux 那支导出 + `publish`，Windows 那支现在**只泵
-//! 音频/时钟、不 publish**（控件是空壳），导出本身是第二步的活。
+//! - Linux：`export_frame_dmabuf` 导出线性 dma-buf → 控件用 `GdkDmabufTexture` 导入，
+//!   我们这边一个 Vulkan 设备都不用建；
+//! - Windows：`ensure_win_surface` 先挂一块出图面 → `render_tick` 渲染并发布 `MISC_SHARED`
+//!   快照 → `publish_win_frame` 把快照引用交给帧槽（见 dev_doc §5.7.1）。
+//!
+//! 失败时把文案写进状态（`ErikaStatus::error`）并**之后不再尝试**；上一张继续显示，
+//! 音频改由保活泵喂。**要不要换别的播放实现由调用者决定** —— 这个库只负责上报。
+//!
+//! 「要不要出帧 / 保活泵」这套策略是跨平台的，分平台的只有两件事：「怎么导出这一帧」，
+//! 以及 Windows 上「没有宿主 tick 时谁来泵」（`WINDOWS_PUMP_EVERY` / `WINDOWS_IDLE`）。
 
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -65,8 +67,7 @@ impl ErikaEngine {
             (request.export.0, request.export.1, request.scale)
         };
 
-        // TODO(windows): 导出这一帧 —— erika 的 D3D11 共享纹理（`windows_flutter_texture_iunknown`）
-        // → `FrameImage::SharedTexture`。在那之前 Windows 只泵不起帧。
+        // Linux：导出这一帧（线性 dma-buf → `FrameImage::Dmabuf`）。Windows 的分支在下面。
         #[cfg(target_os = "linux")]
         let result = self.presenter.export_frame_dmabuf(width, height, scale);
         // 诊断：各阶段耗时，实现在 `trace.rs`（`NSH_ERIKA_TRACE=1` 才动）。
@@ -86,7 +87,7 @@ impl ErikaEngine {
             }
             Ok(None) => None, // 暂停/无新帧：保留上一张
             // 没有兜底路径（见 dev_doc §8）：记下来，之后不再尝试导出，
-            // 由应用决定整条降级到 NSH 内置 <video>。
+            // 由调用者决定怎么办（这个库只上报）。
             Err(e) => self.latch_video_unavailable(format!("dma-buf 导出失败: {e}")),
         }
         // Windows：没有 `export_frame_dmabuf` 那种"交出一帧"的接口（d3d11 不实现
@@ -121,7 +122,7 @@ impl ErikaEngine {
     /// Windows：保证 presenter 上挂着一个和当前画布一致的 `FlutterTexture` surface。
     ///
     /// 首次 attach；之后尺寸/DPI 变了只 `resize_surface`（重建 targets，不换 surface）。
-    /// 返回 `Some(文案)` = 这台机器挂不上出图面（应用据此整条降级到内置 `<video>`）。
+    /// 返回 `Some(文案)` = 这台机器挂不上出图面（写进 `status.error`，由调用者决定怎么办）。
     #[cfg(target_os = "windows")]
     fn ensure_win_surface(&mut self, width: u32, height: u32, scale: f64) -> Option<String> {
         let want = (width.max(1), height.max(1), scale);

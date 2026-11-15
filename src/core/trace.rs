@@ -17,10 +17,10 @@
 //! ```text
 //! NSH_ERIKA_TRACE=1 nsh run
 //! [nsh-erika] engine tick ≈100/s render=true has_media=true
-//! [nsh-erika] gtk tick ≈60/s paint ≈60/s frames ≈60/s maxgap=18ms
+//! [nsh-erika] tick ≈60/s paint ≈60/s frames ≈60/s maxgap=18ms
 //! ```
 //!
-//! - `engine tick` 在、`gtk tick` 不出现 → tick 回调停了，问题在 GTK 那一侧；
+//! - `engine tick` 在、`tick` 不出现 → 宿主那份 tick 停了（Linux：GTK frame clock；Windows：NSH 不再重绘）；
 //! - `render=false has_media=true` → 控件没在要帧（最小化 / 被盖住 / GSK 限频），
 //!   引擎只跑保活泵（每 50ms 一次 `render_tick`）：画面停、声音继续，这是预期行为；
 //! - 两个都在但 `frames < tick` → 引擎出帧跟不上，看 `耗时 …` 那行（[`TimingsProbe`]）。
@@ -113,8 +113,8 @@ impl TimingsProbe {
 /// `frames` 是引擎发布了几帧。
 ///
 /// ```text
-/// [nsh-erika] gtk tick ≈60/s paint ≈60/s frames ≈60/s maxgap=18ms
-/// [nsh-erika] gtk tick ≈1/s  paint ≈1/s  frames ≈1/s  maxgap=1000ms
+/// [nsh-erika] tick ≈60/s paint ≈60/s frames ≈60/s maxgap=18ms
+/// [nsh-erika] tick ≈1/s  paint ≈1/s  frames ≈1/s  maxgap=1000ms
 /// ```
 ///
 /// - `tick`：帧时钟回调次数/s —— 出帧频率的**唯一来源**；

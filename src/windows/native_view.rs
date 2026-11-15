@@ -377,7 +377,7 @@ impl ErikaView {
 ///
 /// 两条路都试：`ID2D1Device2::GetDxgiDevice()`（Win10+ 的 D2D 设备都实现）优先，
 /// 失败就退回"当前 target 的 DXGI surface → 它的 device"。都不通用就返回 `None`，
-/// 控件只报一次然后什么也不画（应用据此降级到内置 `<video>`）。
+/// 控件只报一次、上报引擎，然后什么也不画（由调用者决定怎么办）。
 fn d3d_device(dc: &ID2D1DeviceContext) -> Option<ID3D11Device> {
     // SAFETY: 都是对活的 COM 对象做查询，不转移所有权。
     unsafe {
