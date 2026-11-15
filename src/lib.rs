@@ -8,9 +8,14 @@
 //! ## 用法
 //!
 //! ```ignore
-//! // 应用 crate 的根（nsh 生成的宿主按平台去这里找入口）
+//! // 应用 crate 的根：一个平台一个函数。`#[native_components(…)]` 自己会加 `#[cfg]`，
+//! // 所以这里不用写 cfg，也不用提平台 crate 的名字（类型走 `PlatformComponents`）。
 //! #[native_components(linux)]
-//! fn components(components: &nsh_platform_linux::Components) {
+//! fn register_components_linux(components: &nsh_erika::PlatformComponents) {
+//!     nsh_erika::register(components);
+//! }
+//! #[native_components(windows)]
+//! fn register_components_windows(components: &nsh_erika::PlatformComponents) {
 //!     nsh_erika::register(components);
 //! }
 //!
@@ -34,28 +39,34 @@
 //! ## 分层
 //!
 //! ```text
-//! ┌ 内核层 core/ —— 不认识任何 UI 框架（但还没完全平台无关，见「平台」） ─┐
+//! ┌ 内核层 core/ —— 不认识任何 UI 框架，也不认识 gtk / D2D ──────────────┐
 //! │ engine/     ErikaEngine(actor):PresenterRuntime 的唯一 owner          │
 //! │   engine.rs   结构体 + run 循环 + on_cmd 分派 + 状态发布               │
 //! │   render.rs   on_render + pump_frame：Wake / 出帧 / 保活泵            │
 //! │ cmd.rs      命令词汇表:ErikaCmd 五族                                  │
 //! │ player.rs   ErikaPlayer + ErikaStatus                                │
-//! │ source.rs   ErikaVideoSource + FrameSlot（帧槽 + 视频尺寸）           │
+//! │ source.rs   ErikaVideoSource + FrameSlot + FrameImage（帧载荷）       │
 //! └──────────────────────────────────────────────────────────────────────┘
-//! ┌ Linux 适配层 —— 唯一允许出现 gtk 的地方 ─────────────────────────────┐
-//! │ component.rs  ErikaView：`gtk::Picture` + tick 回调 + `source` prop   │
-//! │ linux/frames.rs  FrameBinder：帧源 → `GdkDmabufTexture`                │
+//! ┌ 平台适配层 —— 唯一允许出现 gtk / D2D 的地方 ─────────────────────────┐
+//! │ linux/native_view.rs   ErikaView：`gtk::Picture` + tick 回调          │
+//! │ linux/frames.rs        FrameBinder：FrameImage → `GdkDmabufTexture`   │
+//! │ windows/native_view.rs ErikaView：`draw(&ID2D1DeviceContext, size)`   │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! ## 画面怎么到屏幕上
 //!
-//! erika 的渲染器把合成结果导出成**线性 dma-buf**（`export_frame_dmabuf`），控件用
+//! **Linux**：erika 的渲染器把合成结果导出成**线性 dma-buf**（`export_frame_dmabuf`），控件用
 //! `GdkDmabufTexture` 直接导入交给 `gtk::Picture`。我们这边不建 Vulkan 设备，也不需要
 //! 导入外部纹理。
 //!
-//! **只有这一条路**：没有 CPU 回读兜底（`capture_frame_rgba` 是截图 API，按设计不启动
-//! 音频、也不计入渲染帧，见 dev_doc §8）。宿主（GTK/GSK）导不进来就没有画面。
+//! **Windows**：**还没接上**。目标是 erika 的 D3D11 共享纹理快照 → 在控件的
+//! `draw(&ID2D1DeviceContext, size)` 里 `DrawBitmap`（NSH 每帧调 `draw`，所以还是拉模型，
+//! 不需要 `attach_surface`）。在那之前 `pump_frame` 在 Windows 上只泵音频/时钟、不出帧，
+//! 控件是空壳 —— 见 dev_doc `nsh-erika-architecture.md` §5.9。
+//!
+//! **每个平台只有一条路**：没有 CPU 回读兜底（`capture_frame_rgba` 是截图 API，按设计不启动
+//! 音频、也不计入渲染帧，见 dev_doc §8）。宿主导不进来就没有画面。
 //!
 //! 导出或导入失败时，原因会写进 [`ErikaStatus::error`]（`player.status().error` /
 //! [`ErikaPlayer::last_error`]）并且**之后不再尝试导出**；应用据此整条降级到 NSH 内置
@@ -86,18 +97,22 @@
 //!
 //! ## 平台
 //!
-//! 目前只有 Linux。macOS / Windows 要各自新写一份导出适配（erika 那边是 Metal / D3D 句柄）。
+//! | 平台 | 出帧 | 控件 | 状态 |
+//! |---|---|---|---|
+//! | Linux | erika 导出线性 dma-buf → `GdkDmabufTexture` → `gtk::Picture` | `linux/native_view.rs` | 跑通（含 VA-API 直通） |
+//! | Windows | 计划：D3D11 共享纹理 → D2D `DrawBitmap` | `windows/native_view.rs` | **只编过**，控件是空壳，画面未接 |
+//! | macOS / Android | 未做 | — | `compile_error!` 在编译期挡住 |
 //!
-//! 目录已经按「`core/` = 平台无关 / `linux/` = Linux」分过一轮，但**还没干净**。
-//! 还耦合在 core 里的点都打了 `TODO(platform)`，用 `rg 'TODO\(platform\)' src` 一次列全：
+//! 帧载荷抽象成 [`FrameImage`]（各平台一份变体，目前只有 Linux 的 `Dmabuf`）；
+//! 帧槽与 `pump_frame` 里"要不要出帧 / 保活泵"的策略是平台无关的，分平台的只有两处：
+//! **怎么导出这一帧**、**怎么把它画到宿主上**。
 //!
-//! - `core/source.rs`：帧槽装的是 `erika::DmabufFrame`（Linux 专用类型）；
-//! - `core/engine/render.rs`：`pump_frame` 调 `export_frame_dmabuf`（只有 Linux 的 erika 有）；
-//! - `core/trace.rs`：`GtkTickProbe` 是 GTK 专用；
-//! - `component.rs`：实际是 Linux/GTK 适配层，建议和 `linux/frames.rs` 一起挪进 `linux/`。
+//! 还耦合的点用 `rg 'TODO\(platform\)' src` 一次列全：
 //!
-//! 跨平台从这张清单开始拆：先把「决定出不出帧」和「按平台导出」分开，
-//! 再抽象帧载荷（dma-buf / Metal 纹理 / D3D 共享纹理）。
+//! - `core/source.rs`：`FrameImage` 只有 Linux 的 `Dmabuf` 变体，Windows 的
+//!   `SharedTexture` 等第二步；`as_dmabuf()` 本身也只在 Linux 编译；
+//! - `core/engine/render.rs`：Windows 那一支现在只泵音频/时钟，不出帧；
+//! - `core/trace.rs`：`GtkTickProbe` 是 GTK 专用，Windows 的 tick 统计还没写。
 
 #![warn(missing_docs)]
 
@@ -113,7 +128,7 @@ mod core;
 #[cfg(target_os = "linux")]
 pub(crate) use linux as backend;
 #[cfg(target_os = "linux")]
-pub use nsh_platform_linux as plaform;
+pub use nsh_platform_linux as platform;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "windows")]
@@ -128,8 +143,8 @@ pub use core::player::{
 pub use core::source::{ErikaVideoSource, FrameImage, FrameRequest};
 pub use erika::PlayerState;
 #[cfg(target_os = "windows")]
-pub use nsh_platform_windows as plaform;
-pub use plaform::Components as PlaformComponents;
+pub use nsh_platform_windows as platform;
+pub use platform::Components as PlatformComponents;
 #[cfg(target_os = "windows")]
 pub(crate) use windows as backend;
 // 句柄的 `call` / `status` 直接暴露 erika 自己的类型:不另造一层。
@@ -150,7 +165,7 @@ pub const COMPONENT_NAME: &str = "erika.video";
 ///
 /// 调用点是**应用 crate 的根**（`nsh.json` `"rust"` 那个 crate）：nsh 生成的宿主按平台
 /// 去那里找固定名字的入口，不能写在这个库里面。
-pub fn register(component: &PlaformComponents) {
+pub fn register(component: &PlatformComponents) {
     component.register(COMPONENT_NAME, backend::native_view::factory());
 }
 

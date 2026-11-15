@@ -22,8 +22,10 @@
 //! 上一张继续显示;音频改由保活泵继续喂。
 //!
 //! TODO(platform): 上面写的是 **Linux 的形状**。「要不要出帧 / 保活泵」这套策略是跨平台的，
-//! 平台相关的只有 `export_frame_dmabuf` 那一行：macOS 走 Metal 句柄、Windows 走 D3D 共享纹理。
-//! 拆的时候把 `pump_frame` 分成「决定出不出帧」（留在 core）+「按平台导出」（各平台实现）。
+//! 平台相关的只有"怎么导出这一帧"：Linux 是 `export_frame_dmabuf`，Windows 是 D3D11 共享纹理
+//! （`windows_flutter_texture_iunknown`，见 dev_doc `nsh-erika-architecture.md` §5.6/§5.9）。
+//! `pump_frame` 已经按这个线分成两支：Linux 那支导出 + `publish`，Windows 那支现在**只泵
+//! 音频/时钟、不 publish**（控件是空壳），导出本身是第二步的活。
 
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -63,8 +65,8 @@ impl ErikaEngine {
             (request.export.0, request.export.1, request.scale)
         };
 
-        // TODO(platform): 只有 Linux 的 erika 有 `export_frame_dmabuf`；
-        // macOS / Windows 换成各自的句柄导出（Metal / D3D），其余逻辑不动。
+        // TODO(windows): 导出这一帧 —— erika 的 D3D11 共享纹理（`windows_flutter_texture_iunknown`）
+        // → `FrameImage::SharedTexture`。在那之前 Windows 只泵不起帧。
         #[cfg(target_os = "linux")]
         let result = self.presenter.export_frame_dmabuf(width, height, scale);
         // 诊断：各阶段耗时，实现在 `trace.rs`（`NSH_ERIKA_TRACE=1` 才动）。
@@ -87,6 +89,8 @@ impl ErikaEngine {
             // 由应用决定整条降级到 NSH 内置 <video>。
             Err(e) => self.latch_video_unavailable(format!("dma-buf 导出失败: {e}")),
         }
+        // Windows：导出还没接（见上面的 TODO(windows)）。这一轮只把音频/时钟泵一下，
+        // 帧槽留空 —— 控件现在是空壳，"要不要出帧"的旗标照常按需复位。
         #[cfg(target_os = "windows")]
         {
             let _ = (width, height, scale);

@@ -14,16 +14,21 @@
 //! 页面函数返回后 `ErikaVideoSource` 这个局部值就 drop 了，而控件的 prop 要到挂载时才送到），
 //! 由播放句柄负责摘除 —— 最后一个 [`ErikaPlayer`](crate::ErikaPlayer) drop 时自动清掉。
 //!
-//! **只有一条出帧路径**：erika 导出的线性 dma-buf。没有 CPU 回读兜底 —— 宿主
-//! （GTK/GSK）导不进来就没画面（见 `dev_doc/nsh-erika-status.md` §8）。
+//! **每个平台一条出帧路径**：Linux 是 erika 导出的线性 dma-buf，没有 CPU 回读兜底 ——
+//! 宿主（GTK/GSK）导不进来就没画面（见 `dev_doc/nsh-erika-status.md` §8）。
 //!
-//! ## 平台边界（待整理）
+//! ## 帧载荷：`FrameImage`
 //!
-//! 帧槽里装的是 [`erika::DmabufFrame`]，这个类型本身是 **Linux 专用**
-//! （`#[cfg(all(target_os = "linux", not(target_env = "ohos")))]`）。
-//! macOS 的导出物是 `CVPixelBuffer`/Metal 纹理、Windows 是 D3D11 共享纹理，都不是 fd。
-//! 跨平台时这一层要先抽象出帧载荷（比如 `enum FrameImage { Dmabuf(..), Metal(..), D3d(..) }`），
-//! 控件再按平台各取各的。
+//! 帧槽装的是 [`FrameImage`]，不是某个平台的原生句柄类型 —— 这样帧槽的读写口
+//! （`publish` / `current` / `frame_snapshot` / `has_frame`）在所有平台是同一套代码。
+//! 各平台的"这一帧长什么样"由各自的变体表示：
+//!
+//! - Linux：`Dmabuf(erika::DmabufFrame)`，即 `export_frame_dmabuf` 的产物（一个 fd +
+//!   stride/offset/尺寸）；
+//! - Windows：留待第二步 —— erika 给的是 D3D11 共享纹理（`*mut c_void` 的 `IUnknown`），
+//!   见 `dev_doc/nsh-erika-architecture.md` §5.6/§5.9。
+//!
+//! 控件侧按平台各取各的（Linux 在 `linux/frames.rs` 里 `as_dmabuf()` → `GdkDmabufTexture`）。
 //!
 //! 所有待拆点用 `rg 'TODO\(platform\)' src` 一次列全。
 
@@ -34,11 +39,23 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use crate::core::cmd::{ErikaCmd, RenderCmd};
 use crate::core::player::EngineGuard;
 
+/// 一帧的画面载荷：各平台一份变体。
+///
+/// 帧槽的读写口（`publish` / `current` / `frame_snapshot` / `has_frame`）在任何平台都是
+/// 同一件事，分平台的只有"怎么得到一帧"和"怎么把它画出来" —— 所以是一个枚举，而不是把
+/// 整条帧槽按平台 cfg 掉。
+///
+/// 目前只有 Linux 的 `Dmabuf` 变体；Windows 的共享纹理变体等第二步
+/// （dev_doc `nsh-erika-architecture.md` §5.9）。
 pub enum FrameImage {
+    /// erika 导出的线性 dma-buf（`export_frame_dmabuf` 的产物，四平面打包成一块，
+    /// 按 `stride` 分行、`offset` 起头）。
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     Dmabuf(erika::DmabufFrame),
 }
+
 impl FrameImage {
+    /// dma-buf 载荷；不是 dma-buf（别的平台的帧）时 `None`。
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     pub fn as_dmabuf(&self) -> Option<&erika::DmabufFrame> {
         match self {
@@ -46,13 +63,13 @@ impl FrameImage {
         }
     }
 }
+
 /// 帧邮箱：1 格、最后写入者胜。**不通知** —— 渲染层每帧主动拉。
 ///
 /// 为什么不走 actor 的 State/Progress：那两条是 `watch`（通知所有观察者"变了"），
 /// 而帧是**取货**——消费者每帧来拉，从不需要通知。
 pub(crate) struct FrameSlot {
-    // TODO(platform): `erika::DmabufFrame` 只有 Linux 有。跨平台时换成帧载荷抽象
-    // （dma-buf fd / Metal 纹理 / D3D 共享纹理），控件的 `FrameBinder` 按平台取。
+    // 载荷是平台无关的 `FrameImage`：Linux 装 dma-buf，其它平台的变体等各自接上。
     texture: Mutex<Option<Arc<FrameImage>>>,
     /// 每写一次 +1。渲染层靠它跳过"同一帧的重复建纹理"。
     generation: AtomicU64,
