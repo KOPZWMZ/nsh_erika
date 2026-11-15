@@ -195,6 +195,12 @@ impl Default for FrameRequest {
 pub(crate) struct Request {
     /// "有人要画面"的旗标。60Hz 只换位，用原子；引擎 `swap(false)` 读并复位。
     pub(crate) want_frame: AtomicBool,
+    /// 引擎每轮泵刷新一次"在不在播"。
+    ///
+    /// 给控件决定**要不要主动续帧**用：Windows 上 `draw` 是唯一的 tick 源，播放中必须每帧
+    /// 都要一次；暂停时降频轮询（`seek` 后仍能刷新，又不空转）。Linux 的 GTK frame clock
+    /// 无条件敲门，用不到这个。
+    pub(crate) playing: AtomicBool,
     /// 画布 + 导出尺寸 + DPI。低频，用锁。
     pub(crate) frame: Mutex<FrameRequest>,
 }
@@ -203,6 +209,7 @@ impl Request {
     pub(crate) fn new() -> Self {
         Self {
             want_frame: AtomicBool::new(false),
+            playing: AtomicBool::new(false),
             frame: Mutex::new(FrameRequest::default()),
         }
     }
@@ -310,6 +317,14 @@ impl ErikaVideoSource {
         let map = REGISTRY.get()?.lock().ok()?;
         let slot = map.get(&id)?.clone();
         Some(Self { slot })
+    }
+
+    /// 现在在不在播（引擎每轮泵刷新的镜像，给控件决定续帧节奏用）。
+    ///
+    /// 只有 Windows 的控件用（Linux 那边的 tick 来自 GTK frame clock，不需要知道播没播）。
+    #[allow(dead_code)]
+    pub(crate) fn is_playing(&self) -> bool {
+        self.slot.request.playing.load(Ordering::Relaxed)
     }
 
     /// 视频原始宽高比（没打开 / 没有视频轨时为 `None`）。控件用它算内接矩形。

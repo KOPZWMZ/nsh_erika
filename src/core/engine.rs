@@ -327,10 +327,13 @@ impl ThreadActor for ErikaEngine {
 /// 它自带一个 wgpu 29 的 device(帧由它导出成 dma-buf,宿主一个 GPU 设备都不用建),
 /// 建一次要几十毫秒 —— 不能在 UI 线程上做。
 fn new_presenter() -> Result<PresenterRuntime, String> {
+    #[cfg(target_os = "linux")]
+    let renderer = RendererBackendPreference::WgpuFallback;
+    #[cfg(target_os = "windows")]
+    let renderer = RendererBackendPreference::PlatformNative;
     PresenterRuntime::new(PresenterConfig {
-        // 导出纹理必须走 wgpu 渲染器,默认的原生后端不支持
         player: PlayerConfig {
-            renderer: RendererBackendPreference::WgpuFallback,
+            renderer,
             ..PlayerConfig::default()
         },
         ..PresenterConfig::default()

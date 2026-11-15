@@ -31,6 +31,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use nsh_core::JsonValue;
 use nsh_platform_windows::{
@@ -55,6 +56,9 @@ use nsh_platform_windows::{
 use crate::core::source::export_size;
 use crate::{ErikaVideoSource, FrameImage, FrameRequest};
 
+/// 暂停时的续帧轮询间隔。播放中不用它（每帧都要）。
+const PAUSED_POLL: Duration = Duration::from_millis(250);
+
 /// 注册用的工厂。
 pub(crate) fn factory() -> ComponentFactory {
     Rc::new(|cx: ComponentContext| -> Box<dyn NativeComponent> { Box::new(ErikaView::new(cx)) })
@@ -75,6 +79,8 @@ pub struct ErikaView {
     open_failed: Cell<bool>,
     /// "第一帧"日志只打一次。
     first_frame: Cell<bool>,
+    /// 上一次主动续帧的时刻（暂停时按 `PAUSED_POLL` 轮询）。
+    last_redraw: Cell<Instant>,
 }
 
 /// 一张已经能画的帧：打开的纹理 + 包在它上面的 D2D 位图。
@@ -100,6 +106,7 @@ impl ErikaView {
             device_failed: Cell::new(false),
             open_failed: Cell::new(false),
             first_frame: Cell::new(false),
+            last_redraw: Cell::new(Instant::now()),
         }
     }
 }
@@ -164,9 +171,18 @@ impl NativeComponent for ErikaView {
         }
         drop(cache);
 
-        // 自续帧：NSH 的 `draw` 只在窗口有帧时被调，所以"有新画面"要主动再要一帧；
-        // 还没有任何画面（刚 open / 首帧没来）也继续要。都没就停，暂停时不空转。
-        if painted || waiting {
+        // 自续帧：`draw` 是 Windows 上**唯一**的 tick 源（Linux 那边是 GTK frame clock
+        // 无条件敲门），所以播放中必须每帧都要一次 —— 否则引擎没人唤醒，画面停住。
+        //
+        // ⚠️ 别只在"这一帧拿到新画面"时才续帧：NSH 的重绘频率（~vsync）比视频帧率快，
+        // 只要有一次 `draw` 早于引擎发布，循环就自己掐断了（实测：出第一帧后冻住，
+        // 点一下暂停/播放才跳一帧）。
+        //
+        // 暂停时按 `PAUSED_POLL` 轮询：`seek` / 换轨之后画面仍能刷新，又不空转。
+        let now = Instant::now();
+        let poll_due = now.duration_since(self.last_redraw.get()) >= PAUSED_POLL;
+        if painted || waiting || source.is_playing() || poll_due {
+            self.last_redraw.set(now);
             self.cx.redraw();
         }
     }
