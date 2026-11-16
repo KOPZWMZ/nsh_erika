@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# 生成 Linux 编译 erika 需要的两个本地前置（都放在 .vendor/，不进 git）：
+# 生成 Linux 编译 erika 需要的**本机前置**（放在 .vendor/，不进 git）：补丁版 libass。
 #
-#   1) .vendor/wgpu-hal —— erika 的 VA-API 直接导入用的那个 fork。
-#      `linux_vulkan.rs::wrap_plane` 调 `Texture::set_external_initial_usage`，
-#      这个方法只在 liberika 仓内的 `third_party/wgpu-hal` 里（wgpu-hal 29.0.3 +
-#      `initial_usage` 字段）。上游只用 workspace 级 `[patch.crates-io]` 接它，
-#      cargo git 依赖传不出来 → 外部消费者必须自己覆盖。
-#   2) .vendor/libass   —— `erika/build.rs` 断言存在的补丁版 libass 0.17.5，
-#      由 liberika 的 `scripts/build_linux_libass.sh` 生成（meson/ninja/patch）。
-#      系统 libass 不能替代：缺"有序内存字体回退"补丁。
+#   补丁版 libass 0.17.5 —— `erika/build.rs` 断言 `ERIKA_LIBASS_DIR`（或默认 dist 路径）下
+#   存在 `lib/libass.a`，因为系统 libass 缺"有序内存字体回退"那个补丁。由 liberika 仓里的
+#   `scripts/build_linux_libass.sh` 生成（meson/ninja/patch）。
+#   顺带把 `.cargo/config.toml`（也不进 git）写出来，只放 `ERIKA_LIBASS_DIR`。
 #
-# 顺带确保 `.cargo/config.toml`（同样不进 git）把它们接上：
-#   paths = [".vendor/wgpu-hal"] + [env] ERIKA_LIBASS_DIR = .vendor/libass
+# 另一项前置**不在这里**：打补丁的 `wgpu-hal` 走 `Cargo.toml` 的 `[patch.crates-io]`
+# （git 指向同一个 tag）。liberika `docs/linux.zh.md`「仓库外的 Cargo workspace」明确要求
+# 这么做，并说明**不要**用 Cargo `paths` 覆盖 —— 那是解析后硬改源码位置，会带
+# "path override … has altered the original list of dependencies" 警告，而且配置不入 git，
+# 别人 clone 下来编不过。
 #
 # 用法：
 #   bash scripts/prepare-linux-deps.sh           # 幂等，已就绪就跳过
@@ -52,6 +51,16 @@ tag=$(sed -n 's/.*tag = "\(v[0-9][^"]*\)".*/\1/p' "$root/Cargo.toml" | head -1)
 [ -n "$tag" ] || die "Cargo.toml 里没找到 erika 的 tag（应为 tag = \"v0.3.x\"）"
 say "erika tag: $tag"
 
+# wgpu-hal 的补丁必须和 erika 同一 tag，否则 HAL 与引擎可能来自不同 commit。
+patch_tag=$(awk '/^\[patch\.crates-io\]/ { seen = 1 } seen && /^wgpu-hal/ { print; exit }' \
+  "$root/Cargo.toml" | sed -n 's/.*tag = "\([^"]*\)".*/\1/p')
+if [ -z "$patch_tag" ]; then
+  die "Cargo.toml 的 [patch.crates-io] 里没有 wgpu-hal = { git = …, tag = … }；
+       Linux 的 Vulkan 直接导入需要它（见 liberika docs/linux.zh.md）"
+fi
+[ "$patch_tag" = "$tag" ] || die "wgpu-hal 的 tag（$patch_tag）必须和 erika 的 tag（$tag）一致"
+say "wgpu-hal patch: $patch_tag（同一 tag，OK）"
+
 # ── 1. 找到 cargo 给 erika 拉的 git checkout ────────────────────────────────
 # 不用 `cargo metadata`：它会把所有平台的依赖都下载/解析一遍（CI 里多一层失败面）。
 # 改成读 Cargo.lock 里的 commit，再去 cargo 的 checkouts 目录里对号；对不上就退回
@@ -67,7 +76,7 @@ find_checkout() {
   local dir best=""
   shopt -s nullglob
   for dir in "$cargo_home"/git/checkouts/liberika-*/*; do
-    [ -f "$dir/third_party/wgpu-hal/Cargo.toml" ] || continue
+    [ -f "$dir/scripts/build_linux_libass.sh" ] || continue
     if [ -n "$rev_short" ] && [ "$(basename "$dir")" = "$rev_short" ]; then
       printf '%s\n' "$dir"
       return 0
@@ -89,20 +98,19 @@ fi
 say "checkout: $checkout"
 
 # ── 2. .cargo/config.toml（不进 git）─────────────────────────────────────
-# 放在幂等判断之前：.vendor 齐全但配置没接上时，不能静默跳过（否则编出来的是
-# crates.io 的 wgpu-hal，报的却是 erika 里的 E0599）。
 want_cfg='# 由 scripts/prepare-linux-deps.sh 生成：本机构建前置，不进 git。
-# 两项都指向 .vendor/，见该脚本顶部注释。
-paths = [".vendor/wgpu-hal"]
-
+# 只放补丁版 libass 的路径；wgpu-hal 的补丁在 Cargo.toml 的 [patch.crates-io] 里。
 [env]
 ERIKA_LIBASS_DIR = { value = ".vendor/libass", relative = true }'
 if [ ! -f "$cfg" ]; then
   say "写 .cargo/config.toml"
   mkdir -p "$root/.cargo"
   printf '%s\n' "$want_cfg" >"$cfg"
-elif ! grep -qF '.vendor/wgpu-hal' "$cfg" || ! grep -qF 'ERIKA_LIBASS_DIR' "$cfg"; then
-  echo "错误：$cfg 已存在但没有接上 .vendor/，为免覆盖你的配置，请手工补上：" >&2
+elif grep -q '^paths' "$cfg"; then
+  die "$cfg 里还有 Cargo \`paths\` 覆盖（wgpu-hal 已改用 Cargo.toml 的 [patch.crates-io]）。
+       请删掉 paths 那一行，只留 [env] ERIKA_LIBASS_DIR = { value = \".vendor/libass\", relative = true }"
+elif ! grep -qF 'ERIKA_LIBASS_DIR' "$cfg"; then
+  echo "错误：$cfg 已存在但没有设 ERIKA_LIBASS_DIR，为免覆盖你的配置，请手工补上：" >&2
   printf '%s\n\n' "$want_cfg" >&2
   exit 1
 fi
@@ -111,21 +119,14 @@ fi
 patch_hash=$(cat "$checkout"/third_party/patches/libass-*/*.patch | sha256sum | cut -d' ' -f1)
 want="$tag $patch_hash"
 if [ "$force" -eq 0 ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] &&
-  [ -f "$vendor/libass/lib/libass.a" ] && [ -f "$vendor/wgpu-hal/Cargo.toml" ]; then
+  [ -f "$vendor/libass/lib/libass.a" ]; then
   say "已是最新（$want），跳过；要重建加 --force"
   exit 0
 fi
 
 mkdir -p "$vendor"
 
-# ── 4. .vendor/wgpu-hal ───────────────────────────────────────────────────
-say "拷贝补丁版 wgpu-hal → .vendor/wgpu-hal"
-rm -rf "$vendor/wgpu-hal.new"
-cp -a "$checkout/third_party/wgpu-hal" "$vendor/wgpu-hal.new"
-rm -rf "$vendor/wgpu-hal"
-mv "$vendor/wgpu-hal.new" "$vendor/wgpu-hal"
-
-# ── 5. .vendor/libass ────────────────────────────────────────────────────
+# ── 4. .vendor/libass ────────────────────────────────────────────────────
 # 上游脚本按 <ROOT>/scripts 与 <ROOT>/third_party 的相对布局工作，所以给它一个
 # scratch 根：脚本、补丁、可选缓存都拷进去，产物再搬回 .vendor/。
 scratch="${NSH_ERIKA_DEPS_DIR:-${CARGO_TARGET_DIR:-$root/target}}/erika-deps/libass-$tag"
@@ -152,10 +153,10 @@ cp -a "$dist" "$vendor/libass.new"
 rm -rf "$vendor/libass"
 mv "$vendor/libass.new" "$vendor/libass"
 
-# ── 6. 收尾 ───────────────────────────────────────────────────────────────
+# ── 5. 收尾 ───────────────────────────────────────────────────────────────
 printf '%s\n' "$want" >"$stamp"
 say "完成："
-printf '    wgpu-hal  %s\n' "$(sed -n 's/^version = "\(.*\)"/\1/p' "$vendor/wgpu-hal/Cargo.toml" | head -1)"
 printf '    libass    %s\n' "$(du -h "$vendor/libass/lib/libass.a" | cut -f1)"
+printf '    wgpu-hal  由 Cargo.toml 的 [patch.crates-io] 提供（%s）\n' "$patch_tag"
 printf '    stamp     %s\n' "$want"
 printf '\n现在可以：cargo check --all-targets\n'

@@ -24,7 +24,8 @@
 ## 2. 依赖：在 liberika 的 checkout 里跑 `xtask`
 
 Windows 侧**不用**系统 FFmpeg、不用 Vulkan、不用补丁 wgpu-hal、不用 PulseAudio —— 全都由
-liberika 自带的 `xtask` vendoring 出来：
+liberika 自带的 `xtask` vendoring 出来（FFmpeg / dav1d / zlib / libass / freetype / harfbuzz /
+fribidi 全都有 Windows 构建）：
 
 ```powershell
 # ① 定位 cargo 给 erika 拉的 checkout
@@ -37,6 +38,10 @@ dir $env:USERPROFILE\.cargo\git\checkouts\liberika-*
 cd $env:USERPROFILE\.cargo\git\checkouts\liberika-<hash>\<rev>
 cargo run --locked -p xtask -- deps build --profile lgpl --all
 ```
+
+> **不用带 `--target`。** 从 liberika 0.3.7（#214）起，`host` 在 Windows x64/ARM64 上自动解析成
+> 对应的 MSVC 三元组，产物落在 `dist/x86_64-pc-windows-msvc/lgpl/` —— 正好是 `erika/build.rs`
+> 找的地方。要编别的架构时才显式写 `--target`。
 
 产物落在 **checkout 内部**：
 
@@ -57,6 +62,11 @@ third_party/dist/x86_64-pc-windows-msvc/lgpl/
 | `ERIKA_NATIVE_TARGET` | 依赖目标三元组（交叉编译时才需要） |
 
 > 依赖随 erika 的 tag 变。**升级 `nsh-erika` 里的 erika tag 之后要重跑 ②**（`--force` 可强制重建）。
+>
+> `nsh-erika` 的 `Cargo.toml` 里有一条 `[patch.crates-io] wgpu-hal = { git = …, tag = … }`。
+> 它是**给 Linux** 的（Vulkan 直接导入要用补丁版 HAL），Windows 上跑不到那条路径，但补丁是全局的
+> —— 也就是 Windows 构建也会用 liberika 仓里那份 `wgpu-hal`。这不影响什么（liberika 自己的 CI
+> 就用同一个 patch 构建 Windows），只是别被 `cargo tree -i wgpu-hal` 显示的 liberika 来源吓到。
 
 ### 和 Linux 的对照（Windows 上都不用管）
 

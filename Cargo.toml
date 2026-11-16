@@ -20,8 +20,10 @@ crossbeam-channel = "0.5"
 # `default-features = false` 会把 wgpu 渲染后端一起关掉，--features wgpu 是 L2 的前提。
 # v0.3.7（2026-11-13）起这些改动都进了上游 tag：DmabufFrame / export_frame_dmabuf、
 # VA-API 直通（去掉 AV_HWFRAME_MAP_DIRECT），不再需要本地 fork 分支。
-# ⚠️ 但 Linux 编译还差两块上游没发出来的东西，见 `.cargo/config.toml` 与 `.vendor/`：
-# 打补丁的 wgpu-hal（`set_external_initial_usage`）和补丁版 libass（build.rs 要它）。
+#
+# Linux 另需两样东西（见文件末尾的 `[patch.crates-io]` 和 `scripts/prepare-linux-deps.sh`）：
+#   - 打补丁的 `wgpu-hal`：Vulkan 直接导入要用 `Texture::set_external_initial_usage`；
+#   - 补丁版 libass：`erika/build.rs` 断言它存在（系统 libass 缺"有序内存字体回退"）。
 erika = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7", features = [
     "wgpu",
 ] }
@@ -34,8 +36,20 @@ nsh-platform-linux = { version = "0.5.1", default-features = false }
 nsh-platform-windows = { version = "0.5.1", default-features = false }
 
 [dev-dependencies]
-# `tests/frame_output.rs` 用 mmap 读 dma-buf 的像素（dma-buf 不支持 read()）：
-# 不做这一步的话，"出帧"只能验到"有个 fd + 尺寸对"，纯黑帧也会过。
 libc = "0.2"
 [workspace]
 members = ["examples/nsh_erika_demo"]
+
+# Cargo **不会**把依赖仓库里的 `[patch.crates-io]` 传下来 —— 外部消费者必须自己写一份
+# （liberika `docs/linux.zh.md`「仓库外的 Cargo workspace」）。Linux 的 Vulkan 直接导入要
+# `wgpu-hal` fork 里那个 `initial_usage` 字段，只开 `wgpu` feature 不够。
+#
+# ⚠️ 这里和上面的 erika **必须同一个 tag**，否则 HAL 和引擎可能来自不同 commit。
+# 本地改 wgpu-hal 时才临时换成 `path = "../liberika/third_party/wgpu-hal"`。
+#
+# 也不用 `[paths]`（`.cargo/config.toml`）覆盖：那是在解析之后硬改源码位置，会带一条
+# "path override … has altered the original list of dependencies" 警告，而且配置不入 git，
+# 别人 clone 下来编不过。`[patch]` 在解析阶段换源，lock 里记的是真实来源。
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7" }
+

@@ -35,12 +35,20 @@ nsh-platform-linux = { version = "0.5.1", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 nsh-platform-windows = { version = "0.5.1", default-features = false }
+
+# Linux 必需：erika 的 Vulkan 直接导入要补丁版 wgpu-hal，而 Cargo **不会**把依赖仓库里的
+# [patch] 传下来 —— 每个外部 workspace 都得自己写一份。两个 tag 必须一致。
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7" }
 ```
 
 ⚠️ **先别急着 `cargo build`** —— erika 要一些本地原生依赖，两个平台的备法完全不同：
 
-- Linux → [docs/linux.md](docs/linux.md)（系统库 + 两个补丁前置，`bash scripts/prepare-linux-deps.sh` 一键）
-- Windows → [docs/windows.md](docs/windows.md)（工具链 + 在 liberika 的 cargo checkout 里跑 `xtask deps build`）
+- Linux → [docs/linux.md](docs/linux.md)
+  - `wgpu-hal` 补丁 = 上面那段（写在清单里，**不要**用 `.cargo/config.toml` 的 `paths`）
+  - 补丁版 `libass` = `bash scripts/prepare-linux-deps.sh` 一键（细节见该文档 §2.2）
+- Windows → [docs/windows.md](docs/windows.md)（工具链 + 在 liberika 的 cargo checkout 里跑 `xtask deps build`；
+  那段的 `[patch]` 在 Windows 上用不到，但无害）
 
 ### 2. 注册控件（**应用 crate 的根**）
 

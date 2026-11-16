@@ -51,12 +51,40 @@ sudo apt install build-essential pkg-config meson ninja-build patch curl \
 
 erika v0.3.7 在 Linux 上有两样东西**上游没发给外部消费者**，必须自己备：
 
-| 前置 | 为什么必须 | 上游怎么接的 |
+| 前置 | 为什么必须 | 怎么备 |
 |---|---|---|
-| **补丁版 `wgpu-hal`** | erika 的 VA-API 直通调用 `Texture::set_external_initial_usage`，这个方法只在 liberika 仓内的 `third_party/wgpu-hal`（wgpu-hal 29.0.3 + `initial_usage` 字段） | 只用 workspace 级 `[patch.crates-io]`，cargo **git 依赖传不出来** |
-| **补丁版 `libass` 0.17.5** | 加了"有序内存字体回退"；系统 libass 不能替代 | `erika/build.rs` 断言 `ERIKA_LIBASS_DIR`（或默认 dist 路径）下的 `lib/libass.a` 存在 |
+| **补丁版 `wgpu-hal`** | erika 的 Vulkan 直接导入要用 `Texture::set_external_initial_usage`（只在 liberika 仓内的 `third_party/wgpu-hal` 里，29.0.3 + `initial_usage`） | 自己根 `Cargo.toml` 里写 `[patch.crates-io]`（**下面 §2.1**） |
+| **补丁版 `libass` 0.17.5** | 加了"有序内存字体回退"；**系统 libass 不能替代** | 跑 upstream 的 `scripts/build_linux_libass.sh`（**下面 §2.2**，脚本一键） |
 
-### 一键（推荐）
+### 2.1 `wgpu-hal`：写在清单里的 `[patch.crates-io]`
+
+Cargo **不会**把依赖仓库里的 `[patch.crates-io]` 传下来，所以每个外部 workspace 都得自己写一份
+（liberika `docs/linux.zh.md`「仓库外的 Cargo workspace」）：
+
+```toml
+[dependencies]
+erika = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7", features = ["wgpu"] }
+
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7" }
+```
+
+- **两个 tag 必须一致**：HAL 和引擎来自同一个 commit，否则可能对不上。
+- ⚠️ **不要用 Cargo 的 `paths`（`.cargo/config.toml`）覆盖**。上游明确要求这一点，原因也很实在：
+  `paths` 是"解析之后硬改源码位置"，会带一条
+  `path override for crate wgpu-hal has altered the original list of dependencies` 警告，
+  而且 `.cargo/config.toml` 通常不入 git —— 别人 clone 下来编不过。
+  `[patch]` 是解析阶段换源，`Cargo.lock` 里记的是真实来源。
+- 本地改 `wgpu-hal` 本身时才临时换成 path 形式：
+  `wgpu-hal = { path = "../liberika/third_party/wgpu-hal" }`（仍在 `[patch.crates-io]` 下）。
+- 锁文件里如果还指着 registry 的 HAL：
+
+  ```sh
+  cargo update -p wgpu-hal --precise 29.0.3
+  cargo tree -i wgpu-hal     # 来源应显示 liberika
+  ```
+
+### 2.2 `libass`：跑一次 upstream 的构建脚本
 
 ```sh
 bash scripts/prepare-linux-deps.sh          # 幂等，已就绪就跳过
@@ -65,45 +93,38 @@ bash scripts/prepare-linux-deps.sh --force  # 强制重建
 
 它做的事：
 
-1. 从 `Cargo.toml` 读 erika 的 tag，再从 `Cargo.lock` 找对应的 commit，定位 cargo 给 erika 拉的
+1. 从 `Cargo.toml` 读 erika 的 tag，再从 `Cargo.lock` 找对应 commit，定位 cargo 给 erika 拉的
    checkout（`$CARGO_HOME/git/checkouts/liberika-*/<rev>/`）；
-2. 把 checkout 里的 `third_party/wgpu-hal` 复制到 `.vendor/wgpu-hal`；
-3. 跑 checkout 里的 `scripts/build_linux_libass.sh`（meson/ninja + 打补丁），把产物放到
-   `.vendor/libass`；
-4. 生成 `.cargo/config.toml`（**不进 git**）把它们接上：
+2. 校验 `[patch.crates-io]` 里的 `wgpu-hal` tag 和 erika 的 tag 一致（不一致直接报错）；
+3. 用 checkout 里的 `scripts/build_linux_libass.sh`（meson/ninja + 打补丁）编出补丁版 libass，
+   安装到 `.vendor/libass`；
+4. 写 `.cargo/config.toml`（**不进 git**，只放这一项）：
 
    ```toml
-   paths = [".vendor/wgpu-hal"]
-
    [env]
    ERIKA_LIBASS_DIR = { value = ".vendor/libass", relative = true }
    ```
 
 5. 写 `.vendor/erika-deps.stamp`（tag + libass 补丁集 hash）作为幂等依据。
-   **libass 的补丁集会随 erika 版本变**，所以升级 erika 后 patch hash 变了会自动重建 ——
+   **libass 的补丁集会随 erika 版本变**，所以升级 erika 后 hash 变了会自动重建 ——
    复用旧的 `.a` 能编过但会静默退回旧行为。
 
-### 手工（你的 app 不在这个仓库时）
+不想要 `.vendor/` 也行：直接在 **erika 的 checkout 里**跑 `bash scripts/build_linux_libass.sh`，
+产物落在 `<checkout>/third_party/dist/<triple>/system/libass`，`erika/build.rs` 默认就去那儿找，
+不必设 `ERIKA_LIBASS_DIR`。缺点是它在 `~/.cargo` 里，换机器要重做、也容易忘。
 
-`.vendor/` 和 `.cargo/config.toml` 都按 **workspace** 生效，所以外部消费者要在**自己应用的根**上做：
+### 2.3 可选：`-fPIC`
 
-```sh
-# ① 找到 cargo 给 erika 拉的 checkout（版本号看 Cargo.lock 里 erika 的 source rev）
-ls -d $CARGO_HOME/git/checkouts/liberika-*/*/
+上游还给 Linux Rust 消费者准备了这组环境变量（内嵌 `soundtouch-ffi` 默认非 PIC，而 erika 会编
+共享库）。我们的构建没它也能过，所以默认没加；一旦遇到
+`relocation R_X86_64_PC32 against symbol … can not be used when making a shared object`，
+在 `.cargo/config.toml` 里加上：
 
-# ② 补丁版 libass：在 checkout 里跑，产物落在 <checkout>/third_party/dist/<target>/system/libass
-cd <liberika-checkout> && bash scripts/build_linux_libass.sh
-
-# ③ 若不想依赖 ② 的默认路径，把它和 wgpu-hal 一起放进你应用的 .vendor/
-mkdir -p .vendor
-cp -r <liberika-checkout>/third_party/wgpu-hal  .vendor/wgpu-hal
-cp -r <liberika-checkout>/third_party/dist/<target>/system/libass .vendor/libass
-
-# ④ 在你应用根写 .cargo/config.toml（内容同上）
+```toml
+[env]
+CFLAGS_x86_64_unknown_linux_gnu = "-fPIC"
+CXXFLAGS_x86_64_unknown_linux_gnu = "-fPIC"
 ```
-
-> `paths = [".vendor/wgpu-hal"]` 是**覆盖依赖图**的写法，必须放在你实际编译的那个 workspace 根；
-> 放在别处不生效。这也是本仓库把 `.cargo/config.toml` 列入 `.gitignore` 的原因（它是本机生成物）。
 
 ---
 
@@ -177,5 +198,6 @@ bash scripts/test-integration.sh --keep-going
 | `Linux audio requires libpulse development files` | 缺 `libpulse-dev` / `libpulse` |
 | `Linux GPU interop requires Vulkan development headers` | 缺 `vulkan-headers` / `libvulkan-dev` |
 | `Linux GPU interop requires FFmpeg 8 development headers` | FFmpeg 版本太旧；要 8.x 的开发包 |
-| `set_external_initial_usage` 找不到 / wgpu-hal 版本冲突 | `.vendor/wgpu-hal` 没接上或与 erika 的 tag 不匹配 → `prepare-linux-deps.sh --force` |
+| `no method named set_external_initial_usage` | `Cargo.toml` 里没有 `[patch.crates-io]`，或 tag 与 erika 不一致 → 按 §2.1 补上，再 `cargo update -p wgpu-hal --precise 29.0.3` |
+| `path override for crate wgpu-hal has altered the original list of dependencies` | 你在 `.cargo/config.toml` 里用了 `paths` 覆盖 → 删掉它，改用 `[patch.crates-io]`（§2.1） |
 | 画面黑但 `frames` 在涨 | 控件的 dma-buf 导入失败：看 `status.error` 与一次性日志 |
