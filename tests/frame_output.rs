@@ -41,8 +41,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use common::*;
-use nsh_erika::{ErikaPlayer, ErikaVideoSource, FrameImage, FrameRequest};
-
+use nsh_erika::ErikaPlayer;
+use nsh_erika::video::{DmabufFrame, ErikaVideoSource, FrameImage, FrameRequest};
 /// 导出的尺寸。故意取小：这条测试只关心"有没有东西"，不在乎分辨率。
 const EXPORT: (u32, u32) = (128, 128);
 
@@ -111,7 +111,7 @@ fn report_missing_frame(player: &ErikaPlayer, what: &str) {
 }
 
 /// 帧的几何必须跟请求一致。
-fn assert_geometry(frame: &erika::DmabufFrame, export: (u32, u32), what: &str) {
+fn assert_geometry(frame: &DmabufFrame, export: (u32, u32), what: &str) {
     assert_eq!(
         (frame.width(), frame.height()),
         export,

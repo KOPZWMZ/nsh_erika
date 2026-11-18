@@ -92,6 +92,12 @@ view()
     }).child(text("暂停")))
 ```
 
+**路径**：根上只有"每个 app 都要手写"的几个（`ErikaPlayer` / `ErikaVideo` / `register` /
+`COMPONENT_NAME` / `PlatformComponents` / `MediaRequest` / `PlayerState`）；其余按关注点分模块：
+`danmaku::` `subtitle::` `tracks::` `state::` `events::` `video::`。上游类型走
+`nsh_erika::erika::…`（**别再自己依赖 liberika**，git rev 对不齐就是两套类型）。
+详见 [docs/api.md](docs/api.md#路径从哪儿-import)。
+
 完整可跑的版本（播放/暂停、±10s、音量、静音、停止、状态行）见
 [`examples/nsh_erika_demo`](examples/nsh_erika_demo)。
 

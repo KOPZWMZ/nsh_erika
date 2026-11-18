@@ -5,8 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use erika::{MediaRequest, PlayerState};
 use nsh_erika::ErikaPlayer;
+use nsh_erika::{MediaRequest, PlayerState};
 
 pub const TEST_MEDIA: &str = "tiny.mp4";
 /// 只有视频轨、没有音频（h264 64x64 / 20 帧 / 2 秒）。

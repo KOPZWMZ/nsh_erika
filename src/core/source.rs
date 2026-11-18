@@ -344,7 +344,10 @@ impl ErikaVideoSource {
         Self { slot }
     }
 
-    /// 这个帧源的号：控件用它绑定显示目标（`erika::video(&source)` 内部就是这个）。
+    /// 这个帧源的号：控件用它绑定显示目标（`ErikaVideo` 内部就是这个）。
+    ///
+    /// 只有**自己手写控件**时才用得上（离屏渲染 / 自建原生视图）：
+    /// `native(COMPONENT_NAME).prop("source", source.id())`。
     pub fn id(&self) -> u64 {
         self.slot.id
     }

@@ -54,7 +54,7 @@ use nsh_platform_windows::{
 };
 
 use crate::core::source::export_size;
-use crate::{ErikaVideoSource, FrameImage, FrameRequest};
+use crate::video::{ErikaVideoSource, FrameImage, FrameRequest};
 
 /// `request_frame` 的最小间隔 = 引擎的**画面节奏**（[`FRAME_EVERY`]），不是随手写的数。
 ///

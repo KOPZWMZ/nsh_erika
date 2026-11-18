@@ -20,15 +20,37 @@ view()
 
 ---
 
+## 路径：从哪儿 import
+
+根上只留"每个 app 都要手写"的几个名字，其余按**屏幕上的关注点**分模块（内部的 `core::`
+永远私有，模块只是出口）。
+
+| 你要的东西 | 路径 |
+|---|---|
+| 播放器 / 画面 / 注册 / 控件名 | `nsh_erika::{ErikaPlayer, ErikaVideo, register, COMPONENT_NAME, PlatformComponents}` |
+| 打开媒体的请求、播放状态 | `nsh_erika::{MediaRequest, PlayerState}`（高频，特意留在根上） |
+| 弹幕：句柄 + 快照 + 五组样式 | `nsh_erika::danmaku::*` |
+| 字幕：句柄 + 快照 + 外观 / 版面 / 延迟 | `nsh_erika::subtitle::*` |
+| 轨道：列表 / 选择 / 外挂字幕 | `nsh_erika::tracks::*` |
+| 状态快照 `ErikaStatus` / `ErikaProgress` | `nsh_erika::state::*` |
+| 事件 `ErikaEvent` + 三个 Listener | `nsh_erika::events::*` |
+| 帧源（只有自写控件才用） | `nsh_erika::video::*` |
+| **其它一切上游类型** | `nsh_erika::erika::…`（全量兜底） |
+
+⚠️ 上游类型**只从 `nsh_erika::erika` 拿**，别在 `Cargo.toml` 里再直接依赖 liberika：
+git rev 对不齐就是两个 crate、两套类型，报错会变成 `expected erika::X, found erika::X`。
+
+---
+
 ## 句柄
 
-| 句柄 | 拿法 | 能干什么 |
+| 句柄（路径） | 拿法 | 能干什么 |
 |---|---|---|
-| `ErikaPlayer` | `ErikaPlayer::new()` | 控制播放、读状态、派发弹幕/字幕/轨道 |
-| `ErikaVideoSource` | `player.video_source()` | **只读**：帧槽 + `request_frame`。一般不用，直接写 `ErikaVideo(&player)` |
-| `ErikaDanmaku` | `player.danmaku()` | 弹幕开关、轨道、样式、偏移 |
-| `ErikaSubtitle` | `player.subtitle()` | 字幕样式、位置、延迟 |
-| `ErikaTracks` | `player.tracks()` | 轨道列表与选择、外挂字幕 |
+| `ErikaPlayer`（根） | `ErikaPlayer::new()` | 控制播放、读状态、派发弹幕/字幕/轨道 |
+| `danmaku::ErikaDanmaku` | `player.danmaku()` | 弹幕开关、轨道、样式、偏移 |
+| `subtitle::ErikaSubtitle` | `player.subtitle()` | 字幕样式、位置、延迟 |
+| `tracks::ErikaTracks` | `player.tracks()` | 轨道列表与选择、外挂字幕 |
+| `video::ErikaVideoSource` | `player.video_source()` | **逃**：帧槽 + `request_frame`。一般不用，直接写 `ErikaVideo(&player)` |
 
 `ErikaPlayer` 很便宜可以随便 clone：`Clone` = 两次引用计数加一；`PartialEq` 按身份
 （`Arc::ptr_eq`）比较，所以能直接塞 `signal()`（信号是 `Copy`，闭包捕获它就不用每个闭包
@@ -86,7 +108,7 @@ native(nsh_erika::COMPONENT_NAME).prop("source", player.video_source().id())
 player.open(MediaRequest::new(uri));  // 打开（异步：命令进队列，立刻返回）
 player.play();                        // 播放
 player.pause();                       // 暂停
-player.toggle();                      // 按**意图**切换（play() 是异步的，别读状态再判断）
+player.set_playing(true);            // 按**目标值**设（幂等；切换请配自己的乐观 signal）
 player.stop();                        // 位置归 0、画面清空，**媒体仍然开着**（能立刻再 play）
 player.seek(Duration::from_secs(30)); // 跳转
 player.set_volume(0.8);               // 0.0..=1.0
@@ -131,20 +153,23 @@ player.set_rate(1.5);                 // 倍速
 ⚠️ **自然播完和 `stop()` 在上游是同一个值**（`PlayerState::Stopped`），本库不替你猜：
 `state() == Stopped` 且 `generation` 没变（`open` / `seek` / `stop` 都会 +1）就是自然播完。
 
-| 方法 | 语义 | 延迟 |
+| 方法 | 语义 | 来源 |
 |---|---|---|
-| `media_time()` / `duration()` | 当前时间 / 总时长 | 直连 `Player`，**零延迟** |
-| `state()` | 引擎**已提交**的播放状态 | 上一个引擎 tick 的值 |
-| `intent_state()` | 用户**意图**状态（`play()` 还没被处理时也准） | 立即 |
-| `is_playing()` | 同上，布尔版 | 立即 |
-| `playback()` | `PlaybackSnapshot`（位置/时长/状态/速率…一次读全） | 混合 |
+| `position()` | 当前位置（一次锁，永远新鲜） | 直连 `Player` |
+| `duration()` | 总时长 | 直连 |
+| `progress()` | `state::ErikaProgress`：位置 + 时长，**同一次采样** | 引擎 10Hz |
+| `state()` | `PlayerState` 8 态（**已提交**，不是意图） | 直连 |
+| `is_playing()` | 布尔版 | 直连 |
+| `rate()` | 当前**生效**的倍速（变速提交后才变） | 直连 |
 | `tracks()` / `chapters()` | 轨道列表 / 章节 | 直连 |
 | `has_media()` / `generation()` | 有没有媒体 / 换片计数 | 直连 |
-| `status()` | `ErikaStatus`：`volume`、`muted`、弹幕面板初值、字幕面板初值、`error` | presenter 侧 |
+| `status()` | `state::ErikaStatus`：音量 / 静音 / 弹幕字幕配置 / `error` | 引擎（**命令侧快照**） |
+| `volume()` / `is_muted()` | `status()` 里那两个字段的便捷读法 | 同上 |
 | `last_error()` | `status().error` 的快捷方式 | 同上 |
 
-**UI 推荐做法**：`set_interval(200ms)` 拉一次写进信号；按钮按下时再乐观写一遍（否则要等下一轮
-才看到反馈）。示例见 [`examples/nsh_erika_demo`](../examples/nsh_erika_demo)。
+**UI 推荐做法**：低频界面 `set_interval(200ms)` 拉一次就够（按钮按下时再乐观写一遍）；
+要"发生那一刻立刻反应"（播完切下一集、缓冲指示器、错误提示）就订阅事件，见上面三条通道。
+示例见 [`examples/nsh_erika_demo`](../examples/nsh_erika_demo)。
 
 ```rust
 let playing = signal(player.is_playing());
@@ -175,17 +200,21 @@ let snapshot = danmaku.state();                  // 面板初始值：轨道、p
 ```
 
 - 弹幕**和视频在同一张纹理**里（erika 渲染时合成），所以出帧频率 = max(视频帧率, 弹幕平滑度)。
-- 样式配置读 `DanmakuSnapshot` 的**类型化视图**（`paint`/`text`/`placement`/`density`/`filter`）当
-  初始值，别用 `default()`，否则会冲掉用户上次的设置。
+- 样式配置读 `danmaku::DanmakuSnapshot` 的**类型化视图**（`paint`/`text`/`placement`/`density`/
+  `filter`）当初始值，别用 `default()`，否则会冲掉用户上次的设置。
+- 类型都在 `nsh_erika::danmaku::` 下（`DanmakuPaint` / `DanmakuText` / `DanmakuPlacement` /
+  `DanmakuDensity` / `DanmakuFilter` / `FilterRule` / `BlockedModes`）。
 
 ## 字幕
 
 ```rust
+use nsh_erika::subtitle::{SubtitlePlacement, SubtitleTextStyle};
+
 let subtitle = player.subtitle();
 subtitle.set_style(SubtitleTextStyle { … });     // 外观
 subtitle.set_placement(SubtitlePlacement { … }); // 版面
 subtitle.set_delay(250_000);                     // 微秒
-let snapshot = subtitle.state();
+let snapshot = subtitle.state();                 // subtitle::SubtitleSnapshot
 ```
 
 外挂字幕走轨道句柄：
@@ -224,7 +253,7 @@ player.tracks().remove_subtitle(track_id);
 | 媒体级 | demux / 解码 / preroll | `open()` 起；`stop()` 保持打开；换片重建 |
 | 进程级 | 帧源注册表（空表时什么都不留） | 应用期 |
 
-- **"最后一个句柄"包括控件持有的帧源**（`ErikaVideoSource`）。所以删掉控件 ≠ 引擎退出，
+- **"最后一个句柄"包括控件持有的帧源**（`video::ErikaVideoSource`）。所以删掉控件 ≠ 引擎退出，
   句柄 `drop` 才是。
 - 想在退出进程前**确定地**收干净：`player.shutdown()` —— 它会等引擎线程把 `PresenterRuntime`
   （GPU 设备 / 解码器 / libass / 字体库）析构完（最多 5 秒，超时打 warn 放弃）。不调也行，

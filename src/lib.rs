@@ -70,7 +70,7 @@
 //! **每个平台只有一条路**：没有 CPU 回读兜底（`capture_frame_rgba` 是截图 API，按设计不启动
 //! 音频、也不计入渲染帧，见 dev_doc §8）。宿主导不进来就没有画面。
 //!
-//! 导出 / 导入 / 拿不到共享纹理时，原因会写进 [`ErikaStatus::error`]（`player.status().error` /
+//! 导出 / 导入 / 拿不到共享纹理时，原因会写进 [`ErikaStatus::error`](crate::state::ErikaStatus)（`player.status().error` /
 //! [`ErikaPlayer::last_error`]）并且**之后不再尝试**。这个库只负责**上报** —— 要不要换实现、
 //! 换哪个、怎么提示用户，都由调用者决定（它不知道宿主还有没有别的播放器可用）。
 //! `ErikaPlayer::new()` 本身就失败时是同步 `Err`，那时压根别建控件。
@@ -105,7 +105,7 @@
 //! | Windows | D3D11 共享纹理 → `OpenSharedResource` → D2D `DrawBitmap` | `windows/native_view.rs` | 跑通（硬解 + 弹幕） |
 //! | macOS / Android | 未做 | — | `compile_error!` 在编译期挡住 |
 //!
-//! 帧载荷抽象成 [`FrameImage`]（各平台一份变体：Linux 的 `Dmabuf`、Windows 的 `SharedTexture`）；
+//! 帧载荷抽象成 [`FrameImage`](crate::video::FrameImage)（各平台一份变体：Linux 的 `Dmabuf`、Windows 的 `SharedTexture`）；
 //! 帧槽与 `pump_frame` 里"要不要出帧 / 保活泵"的策略是平台无关的，分平台的只有两处：
 //! **怎么导出这一帧**、**怎么把它画到宿主上**。
 //!
@@ -129,36 +129,92 @@ mod core;
 #[cfg(target_os = "linux")]
 pub(crate) use linux as backend;
 #[cfg(target_os = "linux")]
-pub use nsh_platform_linux as platform;
-#[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
-pub use backend::native_view::ErikaView;
-pub use core::listener::{
-    ErikaEvent, ErikaEventsListener, ErikaListener, ErikaProgressListener, ErikaStatusListener,
-};
-pub use core::player::{
-    BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuSnapshot,
-    DanmakuText, ErikaDanmaku, ErikaPlayer, ErikaProgress, ErikaStatus, ErikaSubtitle, ErikaTracks,
-    FilterRule, SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
-};
-pub use core::source::{ErikaVideoSource, FrameImage, FrameRequest};
-pub use erika::PlayerState;
-#[cfg(target_os = "windows")]
-pub use nsh_platform_windows as platform;
-pub use platform::Components as PlatformComponents;
 #[cfg(target_os = "windows")]
 pub(crate) use windows as backend;
+
+// ──────────────────────────── 公开面（改之前先读）────────────────────────────
+//
+// 规则三条:
+//
+//   1. **根上只留"每个 app 都要手写"的**:建播放器 / 挂画面 / 注册控件 / 打开媒体 /
+//      判断状态。就这几个,别再加。
+//   2. **我们自己的类型按"屏幕上的关注点"分模块**:`danmaku` / `subtitle` / `tracks` /
+//      `state` / `events` / `video`。内部 `core::` 永远私有,这些只是出口(纯 `pub use`,
+//      不改内部结构)。
+//   3. **上游类型一律走 `nsh_erika::erika::…`**;只有"出现在我们公开字段 / 参数里"的
+//      才在对应模块就地再放一份 —— 让写面板的人不用在两个命名空间之间来回跳。
+//
+// 想加一个导出之前先问"它属于上面哪一条"。一条都不属于 → 它大概是内部实现,不该导。
+
+/// erika 上游的**全量** API —— 兜底路径。
+///
+/// 这里没有的、以及将来上游新增的，都去 `nsh_erika::erika::…` 找。
+///
+/// ⚠️ **不要**在自己的 `Cargo.toml` 里再直接依赖 liberika：只要 git rev / tag 和我们对不齐，
+/// 就是**两个 crate、两套类型**，报错会变成
+/// `expected erika::MediaRequest, found erika::MediaRequest`，几乎看不出原因。
+pub use ::erika;
+
+/// 弹幕：控制句柄 + 状态快照 + 五组样式。
+pub mod danmaku {
+    pub use crate::core::player::{
+        BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement,
+        DanmakuSnapshot, DanmakuText, ErikaDanmaku, FilterRule,
+    };
+    pub use ::erika::danmaku::{DanmakuLayoutConfig, DanmakuShadowStyle, DanmakuTrackInfo};
+}
+/// 字幕：控制句柄 + 状态快照 + 外观 / 版面 / 延迟。
+pub mod subtitle {
+    pub use crate::core::player::{
+        ErikaSubtitle, SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
+    };
+    pub use ::erika::subtitle::SubtitleTrackConfig;
+}
+
+/// 轨道：列表、选择、外挂字幕。
+pub mod tracks {
+    pub use crate::core::player::ErikaTracks;
+    pub use ::erika::subtitle::SubtitleTrackConfig;
+    pub use ::erika::{ChapterInfo, TrackInfo, TrackKind, TrackSelection};
+}
+
+/// 状态的两个快照：`ErikaStatus`（命令侧）与 `ErikaProgress`（10Hz 进度）。
+pub mod state {
+    pub use crate::core::player::{ErikaProgress, ErikaStatus};
+    pub use ::erika::TrackSelection;
+}
+
+/// 事件流：上游离散事件的转发 + 三条订阅出口。
+pub mod events {
+    pub use crate::core::listener::{
+        ErikaEvent, ErikaEventsListener, ErikaListener, ErikaProgressListener, ErikaStatusListener,
+    };
+    pub use ::erika::{PlayerState, TrackSelection};
+}
+
+/// 帧源与帧载荷：**自写控件 / 出帧自检**才用，普通应用用 [`ErikaVideo`](crate::ErikaVideo)。
+pub mod video {
+    pub use crate::core::source::{ErikaVideoSource, FrameImage, FrameRequest};
+    #[cfg(target_os = "windows")]
+    pub use crate::windows::frame::SharedTexture;
+    #[cfg(target_os = "linux")]
+    pub use ::erika::DmabufFrame;
+}
+#[cfg(target_os = "linux")]
+pub use nsh_platform_linux::Components as PlatformComponents;
 #[cfg(target_os = "windows")]
-pub use windows::frame::SharedTexture;
-// 句柄的 `call` / `status` 直接暴露 erika 自己的类型:不另造一层。
-pub use erika::MediaRequest;
-/// 只导出**出现在我们公开签名 / 公开字段里**的上游类型 —— 消费者不依赖 erika。
-pub use erika::danmaku::{DanmakuLayoutConfig, DanmakuShadowStyle, DanmakuTrackInfo};
-pub use erika::presenter::{PresenterRuntime, PresenterStats};
-pub use erika::subtitle::SubtitleTrackConfig;
-pub use erika::{ChapterInfo, TrackInfo, TrackKind, TrackSelection};
+pub use nsh_platform_windows::Components as PlatformComponents;
+
+// ─── 根：只有这几个 ───────────────────────────────────────────────────────────
+
+/// 打开媒体的请求（路径 / URL / HTTP 头 / 起始位置）。上游类型，根上留一份高频的。
+pub use ::erika::MediaRequest;
+/// 播放状态机的 8 个态。上游类型，根上留一份高频的（`match` 事件时天天写）。
+pub use ::erika::PlayerState;
+pub use core::player::ErikaPlayer;
 
 /// 原生控件名。
 ///
@@ -178,7 +234,7 @@ impl ErikaPlayer {
     /// 这个播放器的画面：`view().child(player.video().flex_1())`。
     ///
     /// 和 [`ErikaVideo`] 是同一个东西，只是从播放句柄出发——一个播放器只能有一个画面源，
-    /// 所以不需要另外拿 [`ErikaVideoSource`]。返回的是普通的 NSH 元素，
+    /// 所以不需要另外拿 [`ErikaVideoSource`](crate::video::ErikaVideoSource)。返回的是普通的 NSH 元素，
     /// `.flex_1()` / `.rounded(…)` 这些照常链式调用。
     pub fn video(&self) -> nsh_core::prelude::NativeView {
         view_for(self.source_id())

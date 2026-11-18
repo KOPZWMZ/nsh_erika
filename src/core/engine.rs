@@ -22,7 +22,9 @@ use crate::core::player::{
     DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuText, SubtitleSnapshot,
 };
 use crate::core::source::{FrameSlot, Request};
-use crate::{ErikaProgress, ErikaStatus};
+use crate::danmaku::DanmakuSnapshot;
+use crate::state::{ErikaProgress, ErikaStatus};
+
 use actor_lite::{ActorContext, ActorCore, CmdWait, ThreadActor};
 use crossbeam_channel::Receiver;
 
@@ -283,7 +285,7 @@ impl ErikaEngine {
             danmaku: {
                 let config = self.presenter.danmaku_config().cloned().unwrap_or_default();
                 // 样式分组:读侧与写侧共用同一批类型(`player/danmaku.rs` 的分组表)。
-                crate::DanmakuSnapshot {
+                DanmakuSnapshot {
                     enabled: config.enabled,
                     tracks: self.presenter.danmaku_tracks(),
                     paint: DanmakuPaint::from(&config),

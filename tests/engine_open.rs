@@ -1,4 +1,4 @@
-use erika::MediaRequest;
+use nsh_erika::MediaRequest;
 use nsh_erika::PlayerState;
 use std::sync::Mutex;
 use std::time::Duration;

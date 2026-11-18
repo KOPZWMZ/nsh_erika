@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use erika::PlayerState;
+use nsh_erika::PlayerState;
 use std::{sync::Mutex, time::Duration};
 /// 每个用例都会建一个 `ErikaPlayer`（内部会起引擎线程、建渲染资源）。
 /// 并行跑会互相抢资源、日志也会串在一起，所以这里**串行化**。

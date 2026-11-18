@@ -16,7 +16,8 @@
 //! 里面夹了两个实测(用 `call` 在引擎线程里量/打印,句柄拿不到 presenter):
 //! - ⑦ **实测 C**:`presenter.stop()` 在播放中的真实耗时;
 //! - ⑪ **实测 D**:音量是否跨 `stop` / 换片保留(结论回填 ROADMAP §2.6)。
-use nsh_erika::{ErikaPlayer, MediaRequest, PlayerState, TrackKind};
+use nsh_erika::tracks::TrackKind;
+use nsh_erika::{ErikaPlayer, MediaRequest, PlayerState};
 use std::time::{Duration, Instant};
 
 /// 轮询直到条件成立。条件作用在**句柄**上,因为现在读状态不再经过 `ErikaStatus`。

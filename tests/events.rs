@@ -14,8 +14,8 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use erika::PlayerState;
-use nsh_erika::{ErikaEvent, ErikaEventsListener};
+use nsh_erika::PlayerState;
+use nsh_erika::events::{ErikaEvent, ErikaEventsListener};
 
 mod common;
 use common::*;

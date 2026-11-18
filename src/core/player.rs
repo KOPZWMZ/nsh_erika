@@ -77,6 +77,7 @@ use crate::core::cmd::{ErikaCmd, PlaybackCmd, SettingsCmd, SubtitleCmd};
 use crate::core::engine::ErikaEngine;
 
 use crate::core::source::{ErikaVideoSource, FrameSlot, Request};
+use crate::events::{ErikaEventsListener, ErikaProgressListener, ErikaStatusListener};
 
 use actor_lite::ActorHandle;
 
@@ -228,7 +229,7 @@ pub struct ErikaProgress {
     /// 总时长（`None` = 还没 probe 完 / 没有媒体）。
     pub duration: Option<Duration>,
 }
-/// 播放器句柄:**只管控制与状态**,碰不到帧(帧走 [`crate::ErikaVideoSource`])。
+/// 播放器句柄:**只管控制与状态**,碰不到帧(帧走 [`crate::video::ErikaVideoSource`])。
 ///
 /// `Clone` 成本极低(两次引用计数 +1),可以随便传,也可以跨线程用。
 /// 身份比较看 `engine` 的 `Arc`(同一个播放器 = 同一个 `Arc`),所以能直接拿来比 props
@@ -493,10 +494,10 @@ impl ErikaPlayer {
     /// 高频量不会进来:`PositionChanged` 每 2ms 一条,位置走进度通道
     /// ([`subscribe_progress`](Self::subscribe_progress))。
     ///
-    /// 落后太多(事件被丢)时会收到 [`ErikaEvent::Resync`](crate::ErikaEvent::Resync);
+    /// 落后太多(事件被丢)时会收到 [`ErikaEvent::Resync`](crate::events::ErikaEvent::Resync);
     /// 只有返回 `None` 才是引擎线程没了。
-    pub fn subscribe_events(&self) -> crate::ErikaEventsListener {
-        crate::ErikaEventsListener::new(self.slot.engine.handle.get_events_rx())
+    pub fn subscribe_events(&self) -> ErikaEventsListener {
+        ErikaEventsListener::new(self.slot.engine.handle.get_events_rx())
     }
 
     /// 订阅**状态**(低频):**只在命令路径上**发布(每条命令处理完 / 出错 / open 中途)。
@@ -511,9 +512,9 @@ impl ErikaPlayer {
     /// - **上游自己改状态时这条线是静的**(自然播完、erika 侧报错之后 `is_playing` 会停在
     ///   旧值)。要准就直读 [`is_playing`](Self::is_playing) / [`duration`](Self::duration)。
     ///
-    /// 其余限制见 [`ErikaStatusListener`](crate::ErikaStatusListener)。
-    pub fn subscribe_status(&self) -> crate::ErikaStatusListener {
-        crate::ErikaStatusListener::new(self.slot.engine.handle.state_rx())
+    /// 其余限制见 [`ErikaStatusListener`](crate::events::ErikaStatusListener)。
+    pub fn subscribe_status(&self) -> ErikaStatusListener {
+        ErikaStatusListener::new(self.slot.engine.handle.state_rx())
     }
 
     /// 订阅**进度**(10Hz):位置 + 总时长,引擎已经算好。
@@ -530,8 +531,8 @@ impl ErikaPlayer {
     ///     }
     /// });
     /// ```
-    pub fn subscribe_progress(&self) -> crate::ErikaProgressListener {
-        crate::ErikaProgressListener::new(self.slot.engine.handle.progress_rx())
+    pub fn subscribe_progress(&self) -> ErikaProgressListener {
+        ErikaProgressListener::new(self.slot.engine.handle.progress_rx())
     }
     /// 在引擎线程上对 `PresenterRuntime` 执行一段操作 —— **presenter 独有 API 的逃生口**。
     ///

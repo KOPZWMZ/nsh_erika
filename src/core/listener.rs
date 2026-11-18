@@ -5,7 +5,7 @@
 //!
 //! | 通道 | 语义 | 装什么 | 出口 |
 //! |---|---|---|---|
-//! | 状态 | 最新值,可覆盖,**低频** | [`ErikaStatus`](crate::ErikaStatus) | [`ErikaStatusListener`] |
+//! | 状态 | 最新值,可覆盖,**低频** | [`ErikaStatus`](crate::state::ErikaStatus) | [`ErikaStatusListener`] |
 //! | 进度 | 最新值,可覆盖,**10Hz** | `ErikaProgress` | [`ErikaProgressListener`] |
 //! | 事件 | 每条尽量必达,**罕见** | [`ErikaEvent`] | [`ErikaEventsListener`] |
 //!
@@ -79,7 +79,7 @@ pub enum ErikaEvent {
     TracksChanged,
     /// 当前选中的轨道变了(`select_audio` / `select_subtitle` 生效之后)。
     TrackSelectionChanged(TrackSelection),
-    /// 出错了。全文在 [`ErikaStatus::error`](crate::ErikaStatus) 里也有 ——
+    /// 出错了。全文在 [`ErikaStatus::error`](crate::state::ErikaStatus) 里也有 ——
     /// 事件是"必须被看见一次",状态是"现在坏着、为什么"。
     Error(String),
     /// 落后了:有 `missed` 条事件被丢掉(`broadcast` 容量有限)。
@@ -196,7 +196,7 @@ pub type ErikaProgressListener = ErikaListener<ErikaProgress>;
 /// 两条硬约束:
 ///
 /// - **不要拿它当状态用**:事件是一次性的,晚订阅就永远看不到;而且它不承诺
-///   [`ErikaStatus`](crate::ErikaStatus) 已经刷新。要"现在是怎样"就直读 `player.*()`。
+///   [`ErikaStatus`](crate::state::ErikaStatus) 已经刷新。要"现在是怎样"就直读 `player.*()`。
 /// - **落后不等于结束**:容量有限,落后时会收到 [`ErikaEvent::Resync`];
 ///   只有 `recv()` / `try_recv()` 返回 `None`(写端关闭)才是引擎线程没了。
 pub struct ErikaEventsListener {
