@@ -90,13 +90,13 @@ fn main() {
 
     println!("④ play/pause");
     player.play();
-    // `intent_state()` 比 `state()` 早一步:它包含"已排队但 worker 还没提交的 Play"。
-    // 但它**不是同步的** —— `play()` 只是把命令投进队列,引擎线程处理完才看得到意图
-    // (所以这里用 wait,而不是立刻断言)。这一点和"点了按钮同一帧读状态"直接相关。
+    // `state()` 是**已提交**状态:引擎线程处理完 `play()` 之后才变 `Playing`,所以这里必须
+    // wait,不能立刻断言 —— `play()` 只是把命令投进队列。
+    // （想要"点了就变"请自己维护乐观 signal;库不再提供"意图"读法,理由见 `set_playing` 的文档。）
     wait(
         &player,
-        |p| p.intent_state() == PlayerState::Playing,
-        "intent -> Playing(比 state 早)",
+        |p| p.state() == PlayerState::Playing,
+        "state -> Playing",
     );
     wait(&player, |p| p.is_playing(), "playing = true");
     let t1 = player.media_time();
@@ -357,7 +357,7 @@ fn main() {
     );
 
     println!("⑱ 事件驱动 + 换片:应发事件、generation +1、弹幕轨清空");
-    let mut events = player.subscribe();
+    let mut events = player.subscribe_events();
     while events.try_recv().is_some() {} // 排空积压
 
     let generation_before = player.generation();

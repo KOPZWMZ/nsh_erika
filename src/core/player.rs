@@ -162,12 +162,32 @@ fn shutdown_engine(handle: &ActorHandle<ErikaEngine>) {
 /// 拿不到就返回 `None`,由调用方决定要不要重试。
 const CALL_WITH_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// presenter 侧状态：**`Player` 上读不到的那些**。
+/// 引擎视角的**状态快照**：一份"对得上"的完整真相。
 ///
-/// 生命周期 / 位置 / 时长 / 轨道不在这里 —— 那些直连 `Player`，零延迟。
-/// 视频尺寸也不在这里：控件每帧要用，走 `FrameSlot` 的原子。
+/// 两条读法并存，分工是**粒度**，不是重复：
+///
+/// - **点查**（直连 `erika::Player`，零延迟、不克隆）：`state()` / `media_time()` /
+///   `duration()` / `is_playing()` / `tracks()` —— 要"此刻一个值"就用它们；
+/// - **组查**（就是本结构）：一次拿到一组**同一瞬间**的值，外加"变了"的通知
+///   （[`subscribe_status`](ErikaPlayer::subscribe_status)）。要"一组对得上、还会告诉我变了"
+///   就用它。
+///
+/// 三条限制，写进签名也写不到，只能靠这段话：
+///
+/// 1. **滞后 ≤ 一次泵周期**（引擎空闲 10ms，Windows 16ms）+ 那一轮泵的耗时；
+/// 2. **过渡态不在里面**：`Opening` 只在 `open()` 阻塞期间存在，而那时引擎不会发布 ——
+///    要"打开中"请用调用方的乐观更新，或直读 [`state`](ErikaPlayer::state)；
+/// 3. **位置不在里面**：它随墙钟走，属于进度通道（10Hz 的 `ProgressSnapshot`）。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ErikaStatus {
+    /// 在不在播（**已提交**状态，不是意图）。按钮标签请配调用方自己的乐观 signal。
+    pub is_playing: bool,
+    /// 总时长。`stop()` 之后**不会**变 `None`（媒体还开着）；没有媒体才是 `None`。
+    pub duration: Option<Duration>,
+    /// 当前轨道选择（`{ video, audio, subtitle }`，`None` = 关）。
+    ///
+    /// 选轨是**排队**的，所以刚调完 `select_*` 之后这里可能还是旧值（最多滞后一条命令）。
+    pub selection: TrackSelection,
     /// 音量（在 presenter 的 `audio_output` 上，`Player` 没有）。
     pub volume: f32,
     /// 静音。**不改** `volume`：上游 `set_muted` 只把输出压到 0。
@@ -179,6 +199,7 @@ pub struct ErikaStatus {
     /// 最近一次失败（控制面 + 出帧路径）。
     pub error: Option<String>,
 }
+
 /// 播放器句柄:**只管控制与状态**,碰不到帧(帧走 [`crate::ErikaVideoSource`])。
 ///
 /// `Clone` 成本极低(两次引用计数 +1),可以随便传,也可以跨线程用。
@@ -355,12 +376,27 @@ impl ErikaPlayer {
         self.send_playback(PlaybackCmd::Pause);
     }
 
-    /// 播放 / 暂停切换。看**意图**而不是看已提交状态(`play()` 是异步的)。
-    pub fn toggle(&self) {
-        if self.intent_state() == PlayerState::Playing {
-            self.pause()
+    /// 把播放状态设成**目标值**（幂等）：`true` = 播，`false` = 暂停。
+    ///
+    /// 用目标值而不是"翻转"，是因为翻转的奇偶性要求**每次按键都被精确处理一次**，而命令要跨
+    /// 两条线程边界：① 我们的命令队列 → 引擎线程；② 引擎 → erika 的 worker。① 还**没有上界**
+    /// （引擎可能正卡在 `open` 或 `export_frame_dmabuf` 里几百毫秒）。
+    ///
+    /// 所以 UI 侧请自己维护乐观 signal（页面里那个 `want`）：
+    ///
+    /// ```ignore
+    /// let want = signal(player.is_playing());
+    /// button().on_press(move || {
+    ///     let next = !want.get();
+    ///     want.set(next);          // 立刻反映，不等引擎
+    ///     player.set_playing(next); // 目标值，连点两次也不会翻回去
+    /// });
+    /// ```
+    pub fn set_playing(&self, playing: bool) {
+        if playing {
+            self.play();
         } else {
-            self.play()
+            self.pause();
         }
     }
 
@@ -418,14 +454,25 @@ impl ErikaPlayer {
         self.playback().clock.rate()
     }
 
-    /// 订阅"状态变了"的通知。
+    /// 订阅**事件流**(罕见、必须被看见的边沿):播完了、出错了。
     ///
-    /// 事件**不带数据**,只负责把 UI 叫醒 —— 醒来后调 [`status`](Self::status) 拉最新值。
-    /// 这样只有一个真相(watch 里的状态),而 UI 不用轮询。
-    ///
+    /// 事件**不带状态数据**,只负责把 UI 叫醒 —— 醒来后调 [`status`](Self::status) 拉最新值。
+    /// 有 getter 的状态变化不在这里转发:那会把上游 2ms 一条的 `PositionChanged` 也带进来。
     /// 落后太多时会收到 `Lagged`:直接重拉一次状态即可(状态是 watch,不会丢)。
-    pub fn subscribe(&self) -> crate::ErikaEvents {
-        crate::ErikaEvents(self.slot.engine.handle.get_events_rx())
+    pub fn subscribe_events(&self) -> crate::ErikaEventsListener {
+        crate::ErikaEventsListener::new(self.slot.engine.handle.get_events_rx())
+    }
+
+    /// 订阅**状态**(低频):引擎每处理完一条命令、每收到一个 erika 离散事件发布一次。
+    ///
+    /// 快照里装的是一份对得上的完整真相(生命周期 / 时长 / 轨道版本号 / 音量 / 静音 /
+    /// 弹幕字幕配置 / 错误),所以一个订阅任务**不必持有句柄**:页面离开后引擎退出,
+    /// `next()` 返回 `None`,任务自己收摊。
+    ///
+    /// ⚠️ 只报**订阅之后**的变化 —— 第一件事先调 [`status`](Self::status) 建基线。
+    /// 滞后与过渡态的两条限制见 [`ErikaStatusListener`](crate::ErikaStatusListener)。
+    pub fn subscribe_status(&self) -> crate::ErikaStatusListener {
+        crate::ErikaStatusListener::new(self.slot.engine.handle.state_rx())
     }
 
     /// 在引擎线程上对 `PresenterRuntime` 执行一段操作 —— **presenter 独有 API 的逃生口**。
@@ -475,11 +522,6 @@ impl ErikaPlayer {
     /// `Paused` / `Stopped` / `Closed` / `Error`)。
     pub fn state(&self) -> PlayerState {
         self.player.state()
-    }
-    /// **播放意图**:包含已排队、但 worker 还没提交的 `Play`。
-    /// 按钮标签用它；用 [`state`](Self::state) 会滞后一次提交(点了播放还显示"已暂停")。
-    pub fn intent_state(&self) -> PlayerState {
-        self.player.playback_intent_state()
     }
 
     /// 一次锁拿到「时钟 + generation + state」。进度条每帧调这个,

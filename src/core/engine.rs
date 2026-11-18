@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use crate::ErikaStatus;
 use crate::core::cmd::ErikaCmd;
+use crate::core::listener::ErikaEvent;
 use crate::core::player::{
     DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuText, SubtitleSnapshot,
 };
@@ -79,52 +80,6 @@ fn pump_every() -> Duration {
     #[cfg(not(target_os = "windows"))]
     {
         KEEPALIVE_EVERY
-    }
-}
-
-/// 引擎发给 UI 的事件。**只是"去重新拉一次状态"的通知**,不带数据 ——
-/// 状态本身在 actor 的 `watch` 里,事件只负责把 UI 叫醒。
-#[derive(Clone, Debug)]
-pub enum ErikaEvent {
-    /// 状态可能变了:每条命令处理完、以及收到 erika 的离散事件时各发一次。
-    ///
-    /// 不判等 —— 命令是用户动作,重复一次也无所谓;判等要克隆 + 比较整包状态,更贵。
-    /// 所以收到它之后**重拉一次状态**就对,但别假设"每次值都真的不同"。
-    Changed,
-}
-/// 引擎事件流:[`ErikaPlayer::subscribe`](crate::ErikaPlayer::subscribe) 返回它。
-///
-/// 包一层的理由:通道的**实现**(现在是自己那个 actor 库)不该出现在公开 API 上 ——
-/// 否则换掉或升版它就是一次破坏性变更,而且用户得认识那个库才能写订阅循环。
-pub struct ErikaEvents(pub(crate) actor_lite::broadcast::Receiver<ErikaEvent>);
-
-impl ErikaEvents {
-    /// 等一条"状态变了"的通知。
-    ///
-    /// - `Some(_)`:**去重拉一次状态**(`player.status()` / 直读句柄);
-    /// - `None`:引擎线程没了,不会再有事件。
-    ///
-    /// 落后太多(事件被丢)时也返回 `Some` —— 事件不带数据,重拉一次状态就够了,
-    /// 用户不需要认识底层的错误类型。
-    pub async fn recv(&mut self) -> Option<ErikaEvent> {
-        use actor_lite::broadcast::error::RecvError;
-        match self.0.recv().await {
-            Ok(event) => Some(event),
-            Err(RecvError::Lagged(_)) => Some(ErikaEvent::Changed),
-            Err(RecvError::Closed) => None,
-        }
-    }
-
-    /// [`recv`](Self::recv) 的非阻塞版:有事件就取一条,没有或引擎已退出都是 `None`。
-    ///
-    /// 阻塞式 UI 循环 / 自检里用它(没有 async 上下文也能读)。
-    pub fn try_recv(&mut self) -> Option<ErikaEvent> {
-        use actor_lite::broadcast::error::TryRecvError;
-        match self.0.try_recv() {
-            Ok(event) => Some(event),
-            Err(TryRecvError::Lagged(_)) => Some(ErikaEvent::Changed),
-            Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => None,
-        }
     }
 }
 
@@ -244,6 +199,9 @@ impl ErikaEngine {
     /// 组一份状态（只读 presenter + 自己的字段）
     fn current_status(&self) -> ErikaStatus {
         ErikaStatus {
+            is_playing: self.presenter.is_playing(),
+            duration: self.presenter.duration(),
+            selection: self.presenter.track_selection(),
             // 字幕:样式整包 + 延迟(上游就这两块;font_scale / supersampling 没 getter,读不到)
             subtitle: SubtitleSnapshot::from_parts(
                 self.presenter.subtitle_style(),

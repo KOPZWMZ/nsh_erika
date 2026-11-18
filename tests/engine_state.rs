@@ -60,7 +60,8 @@ fn seek_stop_pause_without_media_are_noops() {
     s.player.seek(Duration::from_secs(5));
     s.player.stop();
     s.player.pause();
-    s.player.toggle();
+    s.player.set_playing(true); // 目标值版 toggle:两个方向都不该凭空变出媒体
+    s.player.set_playing(false);
 
     // 给引擎线程一点时间处理这些命令，确认它没有把状态搞乱。
     std::thread::sleep(Duration::from_millis(200));

@@ -45,6 +45,7 @@
 //! │   render.rs   on_render + pump_frame：Wake / 出帧 / 保活泵            │
 //! │ cmd.rs      命令词汇表:ErikaCmd 五族                                  │
 //! │ player.rs   ErikaPlayer + ErikaStatus                                │
+//! │ listener.rs 三条订阅通道的出口:ErikaStatusListener / …Listener + ErikaEvent │
 //! │ source.rs   ErikaVideoSource + FrameSlot + FrameImage（帧载荷）       │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ┌ 平台适配层 —— 唯一允许出现 gtk / D2D 的地方 ─────────────────────────┐
@@ -134,7 +135,9 @@ mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
 pub use backend::native_view::ErikaView;
-pub use core::engine::{ErikaEvent, ErikaEvents};
+pub use core::listener::{
+    ErikaEvent, ErikaEventsListener, ErikaListener, ErikaStatusListener,
+};
 pub use core::player::{
     BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuSnapshot,
     DanmakuText, ErikaDanmaku, ErikaPlayer, ErikaStatus, ErikaSubtitle, ErikaTracks, FilterRule,

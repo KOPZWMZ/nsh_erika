@@ -139,13 +139,13 @@ bash scripts/test-integration.sh     # 集成测试（需要 GPU + /dev/dri）
 
 ## 许可
 
-本仓库以 **MIT OR Apache-2.0** 双许可发布，任选其一（Rust 生态惯例）：
+本仓库以 **MIT OR Apache-2.0** 双许可发布，任选其一：
 
 - [LICENSE-MIT](LICENSE-MIT)
 - [LICENSE-APACHE](LICENSE-APACHE)
 
-依赖的播放内核 [liberika](https://github.com/AimesSoft/liberika) 有自己的许可（其 FFmpeg 依赖
-用 LGPL profile）。只使用本仓库的源码不产生额外义务；**分发带 erika 的二进制**时要满足它和
+依赖的播放内核 [liberika](https://github.com/AimesSoft/liberika) 有自己的许可。
+只使用本仓库的源码不产生额外义务；**分发带 erika 的二进制**时要满足它和
 LGPL FFmpeg 的要求。
 
 ## 致谢
