@@ -29,8 +29,8 @@ use gtk::prelude::*;
 use nsh_core::JsonValue;
 use nsh_platform_linux::{ComponentContext, ComponentFactory, NativeComponent, gtk4 as gtk};
 
+use crate::core::source::ErikaVideoSource;
 use crate::linux::frames::FrameBinder;
-use crate::video::ErikaVideoSource;
 
 /// 注册用的工厂。
 pub(crate) fn factory() -> ComponentFactory {

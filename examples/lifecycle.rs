@@ -330,15 +330,22 @@ fn main() {
     danmaku.set_enabled(true);
     wait(&player, |_| danmaku.state().enabled, "弹幕开回来");
 
-    // 样式用"读改写":只动 opacity,别的 24 个字段不受影响
-    let before = danmaku.state().config.clone();
+    // 样式用"读改写":只动 opacity,别的 24 个字段不受影响。
+    // 整包配置不在快照里(那是逃生舱的事),所以这里用 `call_with` 在引擎线程上读真值。
+    let before = player
+        .call_with(|p| p.danmaku_config().cloned())
+        .flatten()
+        .expect("读 raw 弹幕配置");
     danmaku.update_config(|c| c.opacity = 0.5);
     wait(
         &player,
-        |_| (danmaku.state().config.opacity - 0.5).abs() < 1e-6,
+        |_| (danmaku.state().paint.opacity - 0.5).abs() < 1e-6,
         "opacity -> 0.5",
     );
-    let after = danmaku.state().config;
+    let after = player
+        .call_with(|p| p.danmaku_config().cloned())
+        .flatten()
+        .expect("再读一次 raw 弹幕配置");
     assert!(
         (after.font_size - before.font_size).abs() < f32::EPSILON
             && after.scroll_duration_seconds == before.scroll_duration_seconds,

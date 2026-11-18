@@ -105,7 +105,7 @@
 //! | Windows | D3D11 共享纹理 → `OpenSharedResource` → D2D `DrawBitmap` | `windows/native_view.rs` | 跑通（硬解 + 弹幕） |
 //! | macOS / Android | 未做 | — | `compile_error!` 在编译期挡住 |
 //!
-//! 帧载荷抽象成 [`FrameImage`](crate::video::FrameImage)（各平台一份变体：Linux 的 `Dmabuf`、Windows 的 `SharedTexture`）；
+//! 帧载荷抽象成 `FrameImage`（各平台一份变体：Linux 的 `Dmabuf`、Windows 的 `SharedTexture`）；
 //! 帧槽与 `pump_frame` 里"要不要出帧 / 保活泵"的策略是平台无关的，分平台的只有两处：
 //! **怎么导出这一帧**、**怎么把它画到宿主上**。
 //!
@@ -146,6 +146,8 @@ pub(crate) use windows as backend;
 //      不改内部结构)。
 //   3. **上游类型一律走 `nsh_erika::erika::…`**;只有"出现在我们公开字段 / 参数里"的
 //      才在对应模块就地再放一份 —— 让写面板的人不用在两个命名空间之间来回跳。
+//   4. **逃生舱挂到 `escape-hatch` feature 下,默认不导出**(见 `video` 模块与
+//      `ErikaPlayer::video_source`)。判据:它出现在首页就是"错误的邀请"。
 //
 // 想加一个导出之前先问"它属于上面哪一条"。一条都不属于 → 它大概是内部实现,不该导。
 
@@ -164,7 +166,11 @@ pub mod danmaku {
         BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement,
         DanmakuSnapshot, DanmakuText, ErikaDanmaku, FilterRule,
     };
-    pub use ::erika::danmaku::{DanmakuLayoutConfig, DanmakuShadowStyle, DanmakuTrackInfo};
+    /// 整包样式（24 字段）。**需要 `escape-hatch`**：它和 `ErikaDanmaku::update_config`、
+    /// `DanmakuSnapshot::config` 是一组，日常请用五组类型化视图。
+    #[cfg(feature = "escape-hatch")]
+    pub use ::erika::danmaku::DanmakuLayoutConfig;
+    pub use ::erika::danmaku::{DanmakuShadowStyle, DanmakuTrackInfo};
 }
 /// 字幕：控制句柄 + 状态快照 + 外观 / 版面 / 延迟。
 pub mod subtitle {
@@ -196,6 +202,7 @@ pub mod events {
 }
 
 /// 帧源与帧载荷：**自写控件 / 出帧自检**才用，普通应用用 [`ErikaVideo`](crate::ErikaVideo)。
+#[cfg(feature = "escape-hatch")]
 pub mod video {
     pub use crate::core::source::{ErikaVideoSource, FrameImage, FrameRequest};
     #[cfg(target_os = "windows")]
@@ -234,7 +241,7 @@ impl ErikaPlayer {
     /// 这个播放器的画面：`view().child(player.video().flex_1())`。
     ///
     /// 和 [`ErikaVideo`] 是同一个东西，只是从播放句柄出发——一个播放器只能有一个画面源，
-    /// 所以不需要另外拿 [`ErikaVideoSource`](crate::video::ErikaVideoSource)。返回的是普通的 NSH 元素，
+    /// 所以不需要另外拿 `video::ErikaVideoSource`（那是逃生舱，要 `escape-hatch`）。返回的是普通的 NSH 元素，
     /// `.flex_1()` / `.rounded(…)` 这些照常链式调用。
     pub fn video(&self) -> nsh_core::prelude::NativeView {
         view_for(self.source_id())

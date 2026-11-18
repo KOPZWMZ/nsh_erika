@@ -13,8 +13,7 @@ use std::time::Instant;
 use gtk::prelude::*;
 use nsh_platform_linux::gtk4 as gtk;
 
-use crate::core::source::export_size;
-use crate::video::{ErikaVideoSource, FrameImage, FrameRequest};
+use crate::core::source::{ErikaVideoSource, FrameImage, FrameRequest, export_size};
 
 /// `DRM_FORMAT_ABGR8888`（内存里是 R,G,B,A，对应 erika 的 R8G8B8A8_UNORM）。
 const FOURCC_ABGR8888: u32 = 0x3432_4241;

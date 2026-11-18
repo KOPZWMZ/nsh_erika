@@ -340,6 +340,8 @@ pub struct ErikaVideoSource {
 }
 
 impl ErikaVideoSource {
+    /// 只有逃生舱（`ErikaPlayer::video_source`）用它 —— 关掉 feature 时就没人构造了。
+    #[cfg(feature = "escape-hatch")]
     pub(crate) fn new(slot: Arc<Slot>) -> Self {
         Self { slot }
     }
@@ -348,6 +350,7 @@ impl ErikaVideoSource {
     ///
     /// 只有**自己手写控件**时才用得上（离屏渲染 / 自建原生视图）：
     /// `native(COMPONENT_NAME).prop("source", source.id())`。
+    #[cfg(feature = "escape-hatch")]
     pub fn id(&self) -> u64 {
         self.slot.id
     }

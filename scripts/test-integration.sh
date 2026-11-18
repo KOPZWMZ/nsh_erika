@@ -28,8 +28,16 @@ TESTS=(
   engine_state
   engine_open
   engine_playback
+  events
   # 出帧路径（需要能导出 dma-buf 的 Vulkan 设备；没有时打 SKIP 不算失败）
   frame_output
+)
+
+# 需要逃生舱 feature 的用例：它们的断言就建在那批 API 上（`video::*` / `video_source()`）。
+# 不给的话 `frame_output` 会被顶部的 `#![cfg(feature = "escape-hatch")]` 整条编掉，
+# 跑出"0 个用例"还显示 PASS —— 出帧那条回归就静默丢了。
+declare -A EXTRA_ARGS=(
+  [frame_output]="--features escape-hatch"
 )
 
 keep_going=0
@@ -86,7 +94,8 @@ for name in "${TESTS[@]}"; do
   log="$logs/$name.log"
   printf '==> %s\n' "$name"
   started=$(now_ms)
-  if cargo test --test "$name" ${cargo_args[@]+"${cargo_args[@]}"} >"$log" 2>&1; then
+  # EXTRA_ARGS 故意不加引号：里面是"空格分隔的参数"，要按词拆开
+  if cargo test --test "$name" ${EXTRA_ARGS[$name]:-} ${cargo_args[@]+"${cargo_args[@]}"} >"$log" 2>&1; then
     elapsed=$(($(now_ms) - started))
     summary=$(grep -E '^test result:' "$log" | tail -1)
     results+=("PASS  $name  ${elapsed}ms  ${summary#test result: }")
@@ -116,7 +125,8 @@ run_lavapipe() {
   local started
   started=$(now_ms)
   if WGPU_BACKEND=vulkan VK_ICD_FILENAMES="$icd" \
-    cargo test --test frame_output ${cargo_args[@]+"${cargo_args[@]}"} >"$log" 2>&1; then
+    cargo test --test frame_output --features escape-hatch \
+      ${cargo_args[@]+"${cargo_args[@]}"} >"$log" 2>&1; then
     local elapsed summary
     elapsed=$(($(now_ms) - started))
     summary=$(grep -E '^test result:' "$log" | tail -1)

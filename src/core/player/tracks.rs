@@ -101,18 +101,31 @@ impl ErikaTracks {
     /// [`select_subtitle`](Self::select_subtitle)**，别去 [`list`](Self::list) 里找：
     /// 列表是 worker 同步过来的，挂完那一刻可能还没刷新（有短暂空窗）。
     ///
-    /// （presenter 对这个也是**纯转发**，没有音频协调动作，所以走 `raw()` 不算绕过协调。）
+    /// （presenter 对这个也是**纯转发**，没有音频协调动作，所以走 `player_inner()` 不算绕过协调。）
+    ///
+    /// ⚠️ **顺序**：这条是**直连写**（不进引擎的命令队列），而 [`open`](super::ErikaPlayer::open)
+    /// 是排队 + 同步重建（会 join 掉旧 worker 再重建）。所以"`open()` 之后同一帧就挂字幕"
+    /// 会撞在重建窗口里 —— 轻则字幕被丢，重则可阻塞到超时报
+    /// `playback worker stopped …`。要按顺序就把它排进队列：
+    ///
+    /// ```ignore
+    /// player.open(MediaRequest::new(uri));
+    /// player.call(|p| { let _ = p.player().add_external_subtitle(sub_uri); });  // 排在 open 之后
+    /// ```
+    ///
+    /// 或者等 `PlayerState::Ready`（`StateChanged` 事件）之后再挂。
+    /// 长期修法见 `dev_doc/api-feedback.md` §9。
     pub fn add_external_subtitle(
         &self,
         uri: impl Into<String>,
     ) -> erika::Result<SubtitleTrackConfig> {
-        self.player.raw().add_external_subtitle(uri)
+        self.player.player_inner().add_external_subtitle(uri)
     }
 
     /// 摘掉一条外部字幕轨（只有 `TrackInfo::can_remove == true` 的能摘）。
     ///
     /// **直连**（纯转发，发完即返回）；给的不是外部字幕 id 时上游返回 `Err`。
     pub fn remove_subtitle(&self, track_id: i64) -> erika::Result<()> {
-        self.player.raw().remove_subtitle_track(track_id)
+        self.player.player_inner().remove_subtitle_track(track_id)
     }
 }

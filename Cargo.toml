@@ -15,6 +15,7 @@ serde_json = "1"
 actor-lite = "0.1.2"
 crossbeam-channel = "0.5"
 
+
 # liberika 的播放内核（解码 / 同步 / 字幕 / 弹幕 / 音频）。
 # 默认 feature（libass 字幕、内嵌 fallback 字体、ArtCNN）必须留着；
 # `default-features = false` 会把 wgpu 渲染后端一起关掉，--features wgpu 是 L2 的前提。
@@ -28,6 +29,10 @@ erika = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7", feature
     "wgpu",
 ] }
 
+[features]
+# 逃生舱：默认关闭 —— 打开才导出"绕过封装"的那批 API（见 docs/api.md「逃生舱」）。
+# 只影响**导出面**，不影响编译产物。
+escape-hatch = []
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = { version = "0.5.1", default-features = false }
@@ -37,6 +42,12 @@ nsh-platform-windows = { version = "0.5.1", default-features = false }
 
 [dev-dependencies]
 libc = "0.2"
+
+# `examples/lifecycle.rs` 用到 `call` / `raw()` / `update_config` —— 都在逃生舱里。
+[[example]]
+name = "lifecycle"
+required-features = ["escape-hatch"]
+
 [workspace]
 members = ["examples/nsh_erika_demo"]
 

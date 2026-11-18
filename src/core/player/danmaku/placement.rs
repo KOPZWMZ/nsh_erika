@@ -24,7 +24,8 @@ use crate::core::cmd::DanmakuCmd;
 /// 这两个字段是**同一根轴**（前者是基准、后者是倍数），所以这里只暴露
 /// `scroll_speed`（= 上游 `scroll_speed_factor`，1.0 为默认）。
 /// `scroll_duration_seconds` **不归任何组**（保持引擎当前值，默认 10s）；
-/// 真需要改它就走 [`ErikaDanmaku::update_config`] 逃生舱 —— 两个一起调只会互相稀释。
+/// 真需要改它就走 `ErikaDanmaku::update_config`（逃生舱，需要 `escape-hatch`）——
+/// 两个一起调只会互相稀释。
 ///
 /// # `outline_width` 为什么在"版面"而不是"绘制"
 ///

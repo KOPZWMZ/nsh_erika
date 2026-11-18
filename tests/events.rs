@@ -95,6 +95,8 @@ fn play_to_end_sends_events_but_never_publishes_status() {
 
     let mut saw_playing = false;
     let mut saw_stopped = false;
+    let mut saw_ended = false;
+    let mut ended_after_stopped = false; // 顺序契约：Ended 紧跟 Stopped 之后
     let mut upstream_error = None;
     let mut status_wakeups = 0;
 
@@ -104,6 +106,10 @@ fn play_to_end_sends_events_but_never_publishes_status() {
             match event {
                 ErikaEvent::StateChanged(PlayerState::Playing) => saw_playing = true,
                 ErikaEvent::StateChanged(PlayerState::Stopped) => saw_stopped = true,
+                ErikaEvent::Ended => {
+                    saw_ended = true;
+                    ended_after_stopped = saw_stopped;
+                }
                 ErikaEvent::Error(text) => upstream_error = Some(text),
                 _ => {}
             }
@@ -111,7 +117,7 @@ fn play_to_end_sends_events_but_never_publishes_status() {
         if status.try_take().is_some() {
             status_wakeups += 1;
         }
-        if saw_stopped && !s.player.is_playing() {
+        if saw_ended && !s.player.is_playing() {
             break;
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -123,6 +129,17 @@ fn play_to_end_sends_events_but_never_publishes_status() {
         "自然播完应转发 StateChanged(Stopped)（state={:?}, err={:?}）",
         s.player.state(),
         s.player.last_error()
+    );
+    // 这条是"播完切下一集"的地基：上游判好的是**自然播完**，不是 stop()。
+    assert!(
+        saw_ended,
+        "自然播完应转发 ErikaEvent::Ended（state={:?}, err={:?}）",
+        s.player.state(),
+        s.player.last_error()
+    );
+    assert!(
+        ended_after_stopped,
+        "顺序契约：Ended 应紧跟 StateChanged(Stopped) 之后（上游保证）"
     );
 
     // 直读是权威值：播完之后立刻就是 false / Stopped（不用等任何发布）。

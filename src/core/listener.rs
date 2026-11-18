@@ -15,9 +15,10 @@
 //!
 //! # 三条通道各管什么(改事件设计前先看这段)
 //!
-//! - **事件 = 上游离散事实的转发**,白名单(状态 / 缓冲 / 轨道 / 选轨 / 错误)。
-//!   引擎在这里**不做推断**:上游没发的事实(典型是"自然播完"——上游只有
-//!   `PlayerEvent::StateChanged(Stopped)`,和 `stop()` 是同一个值)不会由我们发明。
+//! - **事件 = 上游离散事实的转发**,白名单(状态 / **播完** / 缓冲 / 轨道 / 选轨 / 错误)。
+//!   引擎在这里**不做推断**,也不替上游改名:上游发什么就转什么。典型是"自然播完" ——
+//!   上游有专门的 `PlayerEvent::Ended`(和 `stop()` 造成的 `Stopped` 区分开),
+//!   我们原样转成 `ErikaEvent::Ended`,不让每个消费者自己去猜。
 //! - **状态 = 命令侧快照**:只在命令路径(`on_cmd` / `fail` / `open` 中途)发布。
 //!   erika 自己改变状态时(例如播完)**不发布** —— 那几个字段(`is_playing` /
 //!   `duration` / `selection`)要准就直读 `player.is_playing()` / `duration()` / `tracks()`。
@@ -50,15 +51,16 @@ use erika::{PlayerState, TrackSelection};
 ///
 /// 规则只有三条:
 ///
-/// 1. **只转离散、低频的**:白名单是 `StateChanged` / `BufferingChanged` / `TracksChanged` /
-///    `TrackSelectionChanged` / `Error`。`PositionChanged` 每 2ms 一条,是采样量不是事实,
-///    永远不进这条流(位置走进度通道)。
+/// 1. **只转离散、低频的**:白名单是 `StateChanged` / `Ended` / `BufferingChanged` /
+///    `TracksChanged` / `TrackSelectionChanged` / `Error`。`PositionChanged` 每 2ms 一条,
+///    是采样量不是事实,永远不进这条流(位置走进度通道)。
 /// 2. **payload 能不带就不带**:只有消费者猜不出来的才带(`PlayerState` / `bool` /
 ///    `TrackSelection`)。`TracksChanged` 故意不带 `Vec<TrackInfo>` —— 广播会把大包复制给
 ///    每个订阅者,而且那些类型一导出就跟着上游版本跑。要列表就调 `player.tracks()`。
-/// 3. **不推断**:上游没发的事实这里也不会有。典型是**自然播完** —— 上游只有
-///    `StateChanged(Stopped)`,和 `stop()` 是同一个值,本库不替你猜。要区分:
-///    `state() == Stopped` 且 `generation` 没变(`open` / `seek` / `stop` 都会 +1)。
+/// 3. **不推断**:上游没发的事实这里也不会有,也不会替上游改名。典型是**自然播完** ——
+///    上游有专门的 `PlayerEvent::Ended`(紧跟在 `StateChanged(Stopped)` 之后),
+///    我们原样转发成 [`Ended`](Self::Ended);**不要**自己拿 `Stopped` + `position ≈
+///    duration` 去猜(seek 到片尾、无 duration 的源都会误判)。
 ///
 /// 事件**不承诺 `ErikaStatus` 已经刷新**(见模块文档):收到事件后要值就直读 `player.*()`。
 /// 通道是 `broadcast`:容量有限,落后太多会收到 [`Resync`](Self::Resync) ——
@@ -70,8 +72,17 @@ use erika::{PlayerState, TrackSelection};
 pub enum ErikaEvent {
     /// 播放状态变了(`Idle` / `Opening` / `Ready` / `Playing` / `Paused` / `Stopped` / …)。
     ///
-    /// ⚠️ `Stopped` 有两种情况:自然播完,或者 `stop()`。本库不区分,见上一条规则 3。
+    /// ⚠️ `Stopped` 有两种情况:自然播完,或者 `stop()`。**要区分就用
+    /// [`Ended`](Self::Ended)** —— 它会紧跟在这条之后到。
     StateChanged(PlayerState),
+    /// **媒体自己放完了**(不是 `stop()` 造成的)。
+    ///
+    /// 上游判好的事实(`PlayerEvent::Ended`),只在这一种场景发一次;顺序上紧跟
+    /// `StateChanged(Stopped)`。连播 / 结算 / "下一集"就靠它 —— 别用
+    /// `position ≈ duration` 去猜(seek 到片尾、没有 duration 的源都会误判)。
+    ///
+    /// 想读 level 版:`raw().is_stopped_at_end()`(逃生舱,`Stopped && 曾经播完`)。
+    Ended,
     /// 缓冲状态变了。**上游没有 getter 读它**,所以这是拿到它的唯一途径。
     Buffering(bool),
     /// 轨道列表变了(probe 完成、外挂字幕挂上 / 摘掉)。**不带列表**,要列表调

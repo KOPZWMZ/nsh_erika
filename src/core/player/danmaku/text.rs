@@ -19,7 +19,7 @@ use crate::core::cmd::DanmakuCmd;
 ///
 /// ⚠️ 上游还有一个 `custom_font_face_index`（`#[doc(hidden)]`，TTC 集合里的 face 序号），
 /// **不归任何组**：`apply` 不碰它（保持引擎当前值）。真要用请走
-/// [`ErikaDanmaku::update_config`] 逃生舱。
+/// `ErikaDanmaku::update_config`（逃生舱，需要 `escape-hatch` feature）。
 ///
 /// 读写共用同一类型：写 [`ErikaDanmaku::set_text`]，读
 /// [`DanmakuSnapshot::text`](super::DanmakuSnapshot::text)。

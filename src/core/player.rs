@@ -76,11 +76,13 @@
 use crate::core::cmd::{ErikaCmd, PlaybackCmd, SettingsCmd, SubtitleCmd};
 use crate::core::engine::ErikaEngine;
 
-use crate::core::source::{ErikaVideoSource, FrameSlot, Request};
+#[cfg(feature = "escape-hatch")]
+use crate::core::source::ErikaVideoSource;
+use crate::core::source::{FrameSlot, Request};
 use crate::events::{ErikaEventsListener, ErikaProgressListener, ErikaStatusListener};
 
 use actor_lite::ActorHandle;
-
+#[cfg(feature = "escape-hatch")]
 use erika::presenter::PresenterRuntime;
 use erika::{ChapterInfo, MediaRequest, PlayerState, TrackInfo, TrackSelection};
 
@@ -161,6 +163,7 @@ fn shutdown_engine(handle: &ActorHandle<ErikaEngine>) {
 ///
 /// 别改大:引擎可能正卡在 `open` / `seek` / `export` 里,等太久等于把 UI 一起拖住。
 /// 拿不到就返回 `None`,由调用方决定要不要重试。
+#[cfg(feature = "escape-hatch")]
 const CALL_WITH_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// 引擎视角的**状态快照**：presenter 侧那一半真相 + 几个方便字段。
@@ -229,7 +232,7 @@ pub struct ErikaProgress {
     /// 总时长（`None` = 还没 probe 完 / 没有媒体）。
     pub duration: Option<Duration>,
 }
-/// 播放器句柄:**只管控制与状态**,碰不到帧(帧走 [`crate::video::ErikaVideoSource`])。
+/// 播放器句柄:**只管控制与状态**,碰不到帧(帧走 `video::ErikaVideoSource`,逃式舱加 feature 才有)。
 ///
 /// `Clone` 成本极低(两次引用计数 +1),可以随便传,也可以跨线程用。
 /// 身份比较看 `engine` 的 `Arc`(同一个播放器 = 同一个 `Arc`),所以能直接拿来比 props
@@ -301,10 +304,11 @@ impl ErikaPlayer {
         let slot = crate::core::source::Slot::new(engine, frames, request);
         Ok(Self { player, slot })
     }
-    /// 这个播放器的帧源（显示句柄）。
+    /// 这个播放器的帧源（显示句柄）。**需要 `escape-hatch` feature。**
     ///
     /// 一般不用它：画面直接写 [`video`](Self::video) / [`ErikaVideo`](crate::ErikaVideo)
     /// 就行。要"同一个播放器在几处同时显示"（镜像）或者自己管 tick 时才需要。
+    #[cfg(feature = "escape-hatch")]
     pub fn video_source(&self) -> ErikaVideoSource {
         ErikaVideoSource::new(self.slot.clone())
     }
@@ -487,8 +491,9 @@ impl ErikaPlayer {
 
     /// 订阅**事件流**:erika 的离散事件(状态 / 缓冲 / 轨道 / 选轨 / 错误)逐条转发过来。
     ///
-    /// 用途是"**在发生的那一刻**知道":弹缓冲指示器、播完切下一集、出错弹提示、
-    /// 轨道变了重读一次。**不是**用来读状态的 —— 收到事件后要值就直读 `player.*()`
+    /// 用途是"**在发生的那一刻**知道":播完切下一集([`ErikaEvent::Ended`](crate::events::ErikaEvent::Ended))、
+    /// 弹缓冲指示器、出错弹提示、轨道变了重读一次。**不是**用来读状态的 ——
+    /// 收到事件后要值就直读 `player.*()`
     /// (零延迟),别指望 [`status`](Self::status) 已经刷新。
     ///
     /// 高频量不会进来:`PositionChanged` 每 2ms 一条,位置走进度通道
@@ -547,6 +552,7 @@ impl ErikaPlayer {
     ///
     /// ⚠️ 闭包跑在引擎线程上,**不能阻塞**(会把出帧一起卡住);返回值也拿不回来
     /// (命令是单向的)—— 需要返回值就借个 mpsc 自己捞。
+    #[cfg(feature = "escape-hatch")]
     pub fn call(&self, job: impl FnOnce(&mut PresenterRuntime) + Send + 'static) {
         self.send(ErikaCmd::Call(Box::new(job)));
     }
@@ -566,6 +572,7 @@ impl ErikaPlayer {
     /// let frames = player.call_with(|p| p.runtime_snapshot().stats.rendered_video_frames);
     /// let ok = player.call_with(|p| p.set_playback_rate(2.0).is_ok());
     /// ```
+    #[cfg(feature = "escape-hatch")]
     pub fn call_with<T: Send + 'static>(
         &self,
         job: impl FnOnce(&mut PresenterRuntime) -> T + Send + 'static,
@@ -644,6 +651,10 @@ impl ErikaPlayer {
     /// 章节列表(打开时读出来的;没有就是空)。UI 做章节跳转用。
     pub fn chapters(&self) -> Vec<ChapterInfo> {
         self.player.chapters()
+    }
+    /// 内部用：拿裸 `Player`（`raw()` 的 crate 内版本，不受 feature 影响）。
+    pub(crate) fn player_inner(&self) -> &erika::Player {
+        &self.player
     }
 
     /// **裸访问逃生口**(opt-in)。

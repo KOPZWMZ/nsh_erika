@@ -36,6 +36,7 @@ use erika::MediaRequest;
 
 use crate::core::player::{SubtitlePlacement, SubtitleTextStyle};
 use erika::danmaku::DanmakuLayoutConfig;
+#[cfg(feature = "escape-hatch")]
 use erika::presenter::PresenterRuntime;
 
 /// 逃生舱:交给引擎线程执行的任意 presenter 操作。
@@ -46,6 +47,7 @@ use erika::presenter::PresenterRuntime;
 /// player.call(|p| p.set_luma_upscaler(LumaUpscalerMode::Bilinear)); // 超分
 /// player.call(|p| { let _ = p.capture_frame_rgba(1920, 1080); });    // 截一张
 /// ```
+#[cfg(feature = "escape-hatch")]
 pub(crate) type Job = Box<dyn FnOnce(&mut PresenterRuntime) + Send>;
 
 /// 发给引擎线程的命令。
@@ -75,6 +77,7 @@ pub(crate) enum ErikaCmd {
     /// ⚠️ 它和别的命令一样会走到 `on_cmd` 末尾的 `publish`(发一次状态 + 一个事件)。
     /// 以后如果有调用方用 `call_with` 在 tick 里高频轮询,这里就会变成每秒几十次无效唤醒 ——
     /// 那时把它改成 `return false`(逃生舱不发布),或者把 `publish` 的判等加回来。
+    #[cfg(feature = "escape-hatch")]
     Call(Job),
 }
 

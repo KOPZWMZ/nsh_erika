@@ -32,7 +32,7 @@
 //!   `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json cargo test --test frame_output`
 //! - 完全没有 Vulkan 设备时打印 `SKIP` 并返回（不红 CI），设
 //!   `NSH_ERIKA_REQUIRE_FRAMES=1` 改成硬失败 —— CI 想强制要求"必须能出帧"时用。
-#![cfg(target_os = "linux")]
+#![cfg(all(target_os = "linux", feature = "escape-hatch"))]
 mod common;
 
 use std::collections::BTreeSet;

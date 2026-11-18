@@ -37,7 +37,9 @@
 //! 未成组的字段（`scroll_duration_seconds` / `custom_font_face_index` 等）继续走
 //! [`ErikaDanmaku::update_config`] 逃生舱。
 
-use erika::danmaku::{DanmakuLayoutConfig, DanmakuTrackInfo};
+#[cfg(feature = "escape-hatch")]
+use erika::danmaku::DanmakuLayoutConfig;
+use erika::danmaku::DanmakuTrackInfo;
 
 use crate::core::cmd::{DanmakuCmd, ErikaCmd};
 
@@ -149,6 +151,11 @@ impl ErikaDanmaku {
     /// danmaku.update_config(|c| c.scroll_duration_seconds = 8.0);   // 还没成组的字段
     /// danmaku.update_config(|c| c.custom_font_face_index = 1);
     /// ```
+    ///
+    /// **需要 `escape-hatch` feature**：它把上游的整包 config 露给调用方，是逃生舱
+    /// （日常改样式请用 `set_paint` / `set_text` / … 那一批）。注意分组 setter 内部**也走
+    /// 这条命令**，所以引擎侧的 `DanmakuCmd::UpdateConfig` 永远在，只是不再对外公开。
+    #[cfg(feature = "escape-hatch")]
     pub fn update_config(&self, f: impl FnOnce(&mut DanmakuLayoutConfig) + Send + 'static) {
         self.send(DanmakuCmd::UpdateConfig(Box::new(f)));
     }
@@ -204,8 +211,12 @@ impl ErikaDanmaku {
 /// 所以只能由引擎线程读取后发布过来。
 /// 低频:只在用户操作(开关/加轨/改样式/清空)时变。
 ///
-/// `config` 是上游的整包(24 字段),留作逃生舱读侧;**面板初始化请用下面那几个组视图** ——
-/// 它们的类型和 `set_*` 的入参是同一批,读出来改两下就能写回去。
+/// **面板初始化请用下面那几个组视图** —— 它们的类型和 `set_*` 的入参是同一批,读出来改两下
+/// 就能写回去。
+///
+/// 这里**不放**上游的整包配置(24 字段):有那需求的人走逃生舱自己取 ——
+/// `player.call_with(|p| p.danmaku_config().cloned())`。快照里再存一份等于把同一份数据
+/// 在每条命令上多克隆一遍,还会引诱调用方整份写回去(那会冲掉别人改过的字段)。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DanmakuSnapshot {
     /// 总开关(对应 `DanmakuLayoutConfig::enabled`)。
@@ -225,7 +236,4 @@ pub struct DanmakuSnapshot {
     pub density: DanmakuDensity,
     /// 屏蔽组的类型化视图(模式屏蔽 + 关键词/正则)。
     pub filter: DanmakuFilter,
-    /// 当前生效的完整样式(24 个字段)。逃生舱读侧用;**别拿它整份写回去**
-    /// (会冲掉别人改过的字段,见 [`ErikaDanmaku::update_config`])。
-    pub config: DanmakuLayoutConfig,
 }

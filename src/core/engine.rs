@@ -223,6 +223,7 @@ impl ErikaEngine {
             ErikaCmd::Settings(c) => self.on_settings(c, ctx),
             ErikaCmd::Danmaku(c) => self.on_danmaku(c, ctx),
             ErikaCmd::Subtitle(c) => self.on_subtitle(c),
+            #[cfg(feature = "escape-hatch")]
             ErikaCmd::Call(job) => job(&mut self.presenter), // 逃生舱:不代捕错误
             // 控件侧判断本机出不了帧：记下来（由 [`fail`](Self::fail) 同时写状态和事件），
             // 之后不再尝试出帧。
@@ -293,7 +294,6 @@ impl ErikaEngine {
                     placement: DanmakuPlacement::from(&config),
                     density: DanmakuDensity::from(&config),
                     filter: DanmakuFilter::from(&config),
-                    config,
                 }
             },
             error: self.error.clone(),
@@ -352,6 +352,9 @@ impl ErikaEngine {
                 Ok(PlayerEvent::StateChanged(state)) => {
                     ctx.send_event(ErikaEvent::StateChanged(state))
                 }
+                // 自然播完（不是 stop）：上游在 `StateChanged(Stopped)` 之后紧跟一条，
+                // 原样转发 —— 这是事件通道里唯一"必须被看见一次"的生命周期事实。
+                Ok(PlayerEvent::Ended) => ctx.send_event(ErikaEvent::Ended),
                 Ok(PlayerEvent::BufferingChanged(buffering)) => {
                     ctx.send_event(ErikaEvent::Buffering(buffering))
                 }
