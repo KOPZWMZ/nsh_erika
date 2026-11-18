@@ -84,6 +84,25 @@ wgpu-hal = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7" }
   cargo tree -i wgpu-hal     # 来源应显示 liberika
   ```
 
+#### 用 `nsh run` 时的额外一步（nsh 0.5.0 的限制）
+
+`[patch]` **只在 workspace 根 manifest 生效**。nsh 0.5.0 会把生成的 `.nsh/rust/Cargo.toml`
+当作虚拟 workspace 根，应用自己 manifest 里那份 `[patch]` 因此被忽略（cargo 只打一条
+"patch for the non root package will be ignored"），`nsh run` 于是退回 registry 的 `wgpu-hal`，
+报 `no method named set_external_initial_usage`。而 `cargo check` / `cargo run` 是好的
+（那时应用的 manifest 就是根）。
+
+所以 `nsh run` 还要在 `.cargo/config.toml` 里放一条**配置级**覆盖 —— 它不受 workspace 根限制：
+
+```toml
+# 路径按「本 config 所在目录的上一级」解析
+paths = [".vendor/wgpu-hal"]
+```
+
+代价是 cargo 会打一条 `path override for crate wgpu-hal has altered the original list of
+dependencies` 警告（`paths` 是在解析之后硬改源码位置，cargo 自己说这"不保证行为正确"）。
+它没有实际影响，只是噪音：**等 nsh 支持把应用的 `[patch]` 带进生成的根之后就能删掉。**
+
 ### 2.2 `libass`：跑一次 upstream 的构建脚本
 
 ```sh

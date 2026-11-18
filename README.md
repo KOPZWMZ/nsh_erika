@@ -50,6 +50,11 @@ wgpu-hal = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7" }
 - Windows → [docs/windows.md](docs/windows.md)（工具链 + 在 liberika 的 cargo checkout 里跑 `xtask deps build`；
   那段的 `[patch]` 在 Windows 上用不到，但无害）
 
+另外：**用 `nsh run`（而不是 `cargo run`）时，`[patch]` 不生效** —— nsh 0.5.0 生成的
+`.nsh/rust/Cargo.toml` 才是 workspace 根，应用 manifest 里的 `[patch]` 会被忽略。这时还要在
+`.cargo/config.toml` 里加一条 `paths = [".vendor/wgpu-hal"]`（脚本会写）。细节见
+[docs/linux.md §2.1](docs/linux.md)。
+
 ### 2. 注册控件（**应用 crate 的根**）
 
 ```rust
