@@ -32,7 +32,7 @@ fn wait(player: &ErikaPlayer, cond: impl Fn(&ErikaPlayer) -> bool, what: &str) {
     panic!(
         "超时: {what} (state={:?}, position={:?}, err={:?})",
         player.state(),
-        player.media_time(),
+        player.position(),
         player.last_error()
     );
 }
@@ -99,9 +99,9 @@ fn main() {
         "state -> Playing",
     );
     wait(&player, |p| p.is_playing(), "playing = true");
-    let t1 = player.media_time();
+    let t1 = player.position();
     std::thread::sleep(Duration::from_millis(600));
-    assert!(player.media_time() > t1, "播放中位置该前进");
+    assert!(player.position() > t1, "播放中位置该前进");
     player.pause();
     wait(&player, |p| !p.is_playing(), "playing = false");
 
@@ -109,8 +109,8 @@ fn main() {
     player.seek(Duration::from_secs(30));
     wait(
         &player,
-        |p| p.media_time() >= Duration::from_secs(29),
-        "media_time ≈ 30s",
+        |p| p.position() >= Duration::from_secs(29),
+        "position ≈ 30s",
     );
     println!("  duration={:?}", player.duration());
     assert!(player.duration().is_some(), "探测出总时长后才算真的打开");
@@ -124,7 +124,7 @@ fn main() {
     );
     wait(
         &player,
-        |p| p.media_time() < Duration::from_millis(500),
+        |p| p.position() < Duration::from_millis(500),
         "stop 后位置回 0",
     );
     assert!(
@@ -163,7 +163,7 @@ fn main() {
     //
     // ⚠️ 证据只能用**代次计数器**,不能用"位置前进多少":
     //    headless 没有音频消费端(`PLAN §2-5`),音频环顶到 cap 后播放会被 backpressure
-    //    卡住 —— `media_time` 停在原地是**正常**的,拿它当同步点必然偶发超时(踩过)。
+    //    卡住 —— `position` 停在原地是**正常**的,拿它当同步点必然偶发超时(踩过)。
     // `ErikaStatus` 已经不放 session 了（现在只剩音量 / 静音 / 弹幕 / 字幕 / 错误），
     // 所以改用 `generation()`：它是 erika 的 playback generation，`open`/`seek`/`stop` 都 +1。
     println!("⑨ open 同 uri 会重新打开:generation +1(真的重开了,不是 no-op)");

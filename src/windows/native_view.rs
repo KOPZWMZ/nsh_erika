@@ -56,12 +56,12 @@ use nsh_platform_windows::{
 use crate::core::source::export_size;
 use crate::{ErikaVideoSource, FrameImage, FrameRequest};
 
-/// `request_frame` 的最小间隔：把"要帧"压在显示帧率的量级上。
+/// `request_frame` 的最小间隔 = 引擎的**画面节奏**（[`FRAME_EVERY`]），不是随手写的数。
 ///
 /// 不加这道闸会**自激**：`draw → request_frame → Wake → 引擎出帧 → waker → draw → …`。
 /// 视频 30fps 时这条链会被"没有新帧"自然打断；**一旦有弹幕在飘**，弹幕位置每 tick 都在动，
 /// 于是每次 Wake 都产出一次发布 —— 实测 600 次/秒，等于把每帧的拷贝 + 同步放大 20 倍。
-const REQUEST_EVERY: Duration = Duration::from_millis(16);
+const REQUEST_EVERY: Duration = crate::core::engine::FRAME_EVERY;
 
 /// 多久没画上新画面，就允许越过 [`REQUEST_EVERY`] 再要一次。
 ///

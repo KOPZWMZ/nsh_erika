@@ -16,13 +16,13 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::ErikaStatus;
 use crate::core::cmd::ErikaCmd;
 use crate::core::listener::ErikaEvent;
 use crate::core::player::{
     DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuText, SubtitleSnapshot,
 };
 use crate::core::source::{FrameSlot, Request};
+use crate::{ErikaProgress, ErikaStatus};
 use actor_lite::{ActorContext, ActorCore, CmdWait, ThreadActor};
 use crossbeam_channel::{Receiver, TryRecvError};
 
@@ -34,12 +34,21 @@ mod render;
 mod settings;
 mod subtitle;
 
-/// 没有命令时,引擎线程多久醒一次(排空 erika 事件 / 保活泵)。
+/// 没有命令时,引擎线程多久醒一次(排空 erika 事件 / 保活泵 / 进度节拍)。
 ///
-/// 有命令进来会立刻唤醒,这个超时只负责"什么都不发生"时的那点轮询。
-/// 保活泵([`KEEPALIVE_EVERY`])由 `run` 循环**每轮独立调用**,不依赖这个超时是否触发 ——
-/// 但没人要帧时循环只能靠超时转起来,所以这里必须明显小于那个间隔。
-const IDLE: Duration = Duration::from_millis(10);
+/// **这不是帧率参数。** 有命令进来会立刻唤醒(`send_cmd` 直接 `waker.wake()`):
+/// Linux 上宿主帧时钟每帧调一次 `request_frame` → `Wake`,引擎当帧就醒;Windows 上出帧由
+/// [`pump_every`] 自己驱动。这个超时只负责"什么都不发生"时的那点轮询。
+///
+/// 取 16ms(≈62.5Hz)的两个理由:
+///
+/// - **和 Windows 的泵同频** → 不会出现"16ms 才该泵、10ms 就醒"的抖动(Windows 没有宿主
+///   tick 来要帧,全靠这条);
+/// - **宁可过量采样**:场景没变时上游 `render_tick` 几乎零成本,而少采样会饿死显示
+///   (16ms = 62.5Hz 略高于 60,17ms = 58.8Hz 就掉到 60 以下了)。
+///
+/// 空转一轮的代价是几个原子读 + 两次 `elapsed()`,微秒级 —— 别为它再调这个数。
+const IDLE: Duration = Duration::from_millis(16);
 
 /// 没人要帧时,引擎自己多久泵一次(音频 / 时钟 / 解码),**不发帧**。
 ///
@@ -47,39 +56,83 @@ const IDLE: Duration = Duration::from_millis(10);
 /// 上游 `DEFAULT_AUDIO_LEAD_TIME` 是 120ms(音频领先时钟 120ms 就够),50ms 一次留了两倍余量。
 const KEEPALIVE_EVERY: Duration = Duration::from_millis(50);
 
-/// Windows 的泵间隔：**比 Linux 密得多**，因为 Windows 没有宿主 tick 来"要帧"。
+/// **Windows 的画面节奏**：引擎自泵、控件要帧闸（`windows/native_view.rs::REQUEST_EVERY`）、
+/// 空闲心跳（[`IDLE`]）三处都取它，改一处等于同时改三处 —— 它们的值必须相等。
 ///
-/// Linux 上 GTK frame clock 每帧敲一次控件 tick → `request_frame` → 引擎被叫醒；
-/// Windows 上控件是"按需重绘"的，引擎得自己按帧率泵：`render_tick` 在场景没变时
-/// 几乎零成本（上游 `flutter_scene.matches` 直接返回），所以喷得密不亏。
+/// Linux 上**没有**这个概念：画面节奏由宿主帧时钟决定（GTK 每帧调 `request_frame`
+/// → `Wake`），[`IDLE`] 只负责"什么都不发生时看一眼"。
+///
+/// 这个数取 16ms（≈62.5Hz）而不是 10ms 或 17ms：Windows 没有宿主 tick，全靠这条泵；
+/// 略高于 60 好过略低于（17ms = 58.8Hz 会掉到 60 以下），而场景没变时上游
+/// `render_tick` 几乎零成本（`flutter_scene.matches` 直接返回），过量采样不亏。
 #[cfg(target_os = "windows")]
-const WINDOWS_PUMP_EVERY: Duration = Duration::from_millis(16);
+pub(crate) const FRAME_EVERY: Duration = Duration::from_millis(16);
 
-/// Windows 的循环心跳。和泵同频 → 干净的 ~60Hz，而不是"10ms 醒来、16ms 才泵"的抖动。
+/// 泵周期必须是心跳的**整数倍**，否则 [`IDLE`] 会把泵量化 ——
+/// "心跳 10ms、该泵却在 16ms"的抖动就是这么来的。
+///
+/// 想改画面节奏只动了 [`FRAME_EVERY`] 时，这里会**编译期报错**，
+/// 而不是等到 Windows 上实测发现"怎么只有 62.5Hz"。
 #[cfg(target_os = "windows")]
-const WINDOWS_IDLE: Duration = Duration::from_millis(16);
+const _: () = assert!(
+    FRAME_EVERY.as_nanos() % IDLE.as_nanos() == 0,
+    "Windows 画面节奏和 IDLE 不同步:改泵必须一起改心跳,否则泵会被量化"
+);
 
-/// 本平台的心跳间隔（见 [`IDLE`] 与 [`WINDOWS_IDLE`]）。
-fn idle_every() -> Duration {
-    #[cfg(target_os = "windows")]
-    {
-        WINDOWS_IDLE
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        IDLE
-    }
-}
-
-/// 本平台"多久泵一次"（见上面两个常量的说明）。
+/// 本平台"多久泵一次"：Windows 是**画面节奏**（[`FRAME_EVERY`]），其它平台只是音频保活
+/// （[`KEEPALIVE_EVERY`]，不发帧）。
 fn pump_every() -> Duration {
     #[cfg(target_os = "windows")]
     {
-        WINDOWS_PUMP_EVERY
+        FRAME_EVERY
     }
     #[cfg(not(target_os = "windows"))]
     {
         KEEPALIVE_EVERY
+    }
+}
+
+/// 进度通道的节拍：**由引擎循环自己按墙钟数**，不依赖上游事件。
+///
+/// 循环本来就每隔 [`IDLE`]（16ms）醒一次，所以这个 100ms 只是
+/// 一次 `elapsed()` 判断，不额外唤醒任何东西。和上游的 `PositionChanged` 解耦的好处是：
+/// 进度通道的可用性不再取决于"erika 会不会发某个事件、多久发一条"。
+const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+/// 一个**节拍**:记录"上一次是什么时候" + 自己的周期,只回答"到点没有"。
+///
+/// 它**不调度、不唤醒** —— 驱动者是引擎循环(`run`),循环本来就每隔
+/// [`IDLE`](IDLE) 醒一次(16ms),到点判断只是一次 `elapsed()`
+/// 的纯算术。所以:
+///
+/// - 节拍的**最小粒度 = [`IDLE`](IDLE)(16ms)**,想要比它更密的节奏(比如 200Hz 的某些仪器量),
+///   这个类型帮不了你,那要换驱动方式;
+/// - 每个不同频率各持**一个** `Tick`(现在是 `keepalive` 与 `progress`),它们共享同一次
+///   循环唤醒,互不影响。
+///
+/// 为什么是 `due` + `mark` 两步,而不是"`due()` 返回 true 就自动重置":有的节拍必须在
+/// **真干完活之后**才重置 —— `keepalive_pump` 在没媒体 / 没在播时会提前返回,那一次机会
+/// 不能被吃掉,否则开播后要白等一个周期才泵第一下。反过来,"到期就 `mark` 再试发"也对
+/// (进度通道就是:值没变由判等静默)。两种语义都留在调用方,这个类型只管记账。
+#[derive(Clone, Copy)]
+pub(super) struct Tick {
+    every: Duration,
+    last: Instant,
+}
+
+impl Tick {
+    pub(super) fn new(every: Duration) -> Self {
+        Self {
+            every,
+            last: Instant::now(),
+        }
+    }
+    /// 到点没有。纯算术,**不重置**。
+    pub(super) fn due(&self) -> bool {
+        self.last.elapsed() >= self.every
+    }
+    /// 记一拍:这一轮已经把活干完了。
+    pub(super) fn mark(&mut self) {
+        self.last = Instant::now();
     }
 }
 
@@ -98,8 +151,13 @@ pub(crate) struct ErikaEngine {
     player_events: Receiver<PlayerEvent>,
     /// 上一轮是否真的出了帧(只给 `NSH_ERIKA_TRACE` 探针看,不参与逻辑)
     last_rendered: bool,
-    /// 上一次泵音频的时刻(出帧也算泵),节流 `KEEPALIVE_EVERY`
-    last_keepalive: Instant,
+    /// 音频泵的节拍(出帧也算泵),`pump_every()`
+    keepalive: Tick,
+    /// 进度通道的节拍,`PROGRESS_EVERY`
+    progress: Tick,
+    /// 上一次真正发出去的进度快照。`update_progress` 和 `update_state` 一样是
+    /// `send_replace`(**无条件通知**),所以这里得自己判等,否则每条命令都白唤醒一次。
+    last_progress: ErikaProgress,
     /// `NSH_ERIKA_TRACE=1` 时每秒打一行"引擎醒了多少次"(诊断用)
     tick_probe: Option<crate::core::trace::RateProbe>,
     /// 本机**没有可用的出帧路径**（导出失败或控件侧导入失败）。
@@ -126,6 +184,9 @@ impl ErikaEngine {
     pub(crate) fn new(frames: Arc<FrameSlot>, request: Arc<Request>) -> Self {
         let presenter = new_presenter().unwrap_or_else(|e| panic!("{e}"));
         let player_events = presenter.player().subscribe();
+        // 初值 = 打开前的空进度(位置 0、时长未知)。它和 `init_state_and_progress` 给
+        // watch 的那个一致,所以第一次 `publish` 不会白发一条。
+        let last_progress = ErikaProgress::default();
         Self {
             presenter,
             frames,
@@ -136,7 +197,9 @@ impl ErikaEngine {
             keepalive_failed: false,
             timings_probe: crate::core::trace::TimingsProbe::from_env(),
             last_rendered: false,
-            last_keepalive: Instant::now(),
+            keepalive: Tick::new(pump_every()),
+            progress: Tick::new(PROGRESS_EVERY),
+            last_progress,
             tick_probe: crate::core::trace::RateProbe::from_env("engine tick"),
             #[cfg(target_os = "windows")]
             surface_metrics: None,
@@ -226,6 +289,24 @@ impl ErikaEngine {
             error: self.error.clone(),
         }
     }
+    fn progress_snapshot(&self) -> ErikaProgress {
+        ErikaProgress {
+            position: self.presenter.media_time(),
+            duration: self.presenter.duration(),
+        }
+    }
+
+    /// 进度面:把**算好的**位置写进 actor 的 `watch`。
+    ///
+    /// 判等再写:`update_progress` 只是 `send_replace`,值没变也照样通知,
+    /// 而这条路径会在**每条命令之后**跑一遍(音量、静音、弹幕样式都不动进度)。
+    fn publish_progress(&mut self, ctx: &ActorContext<Self>) {
+        let progress = self.progress_snapshot();
+        if progress != self.last_progress {
+            self.last_progress = progress.clone();
+            ctx.update_progress(progress);
+        }
+    }
     /// 状态面:把状态发布到 actor 的 `watch`,并给 UI 发一条"变了"的通知。
     ///
     /// 只在**命令之后**和**erika 离散事件之后**被调用 —— 那两处都是真的发生了点什么，
@@ -238,12 +319,16 @@ impl ErikaEngine {
         }
         ctx.update_state(self.current_status());
         ctx.send_event(ErikaEvent::Changed);
+        // 进度必须在这里补一次:pause / seek / rate / open 都会换时钟基准,
+        // 而这些变化之后 `PositionChanged` 不一定还会来(暂停就彻底不来了),
+        // 少了这一句,进度条会一直停在旧位置。
+        self.publish_progress(ctx);
     }
 
     /// 排空 erika 的事件流。返回"有没有值得通知 UI 的事"。
     ///
-    /// `PositionChanged` 直接丢:进度用 `playback_snapshot()` 求值,不需要事件
-    /// (播放中它每 2ms 一条,500 条/秒)。
+    /// `PositionChanged` 直接丢:播放中它每 2ms 一条(500 条/秒),是个**采样量**不是事实 ——
+    /// 位置由引擎自己的节拍(`PROGRESS_EVERY`)去采。这里只管"变了就得通知"的离散事件。
     fn drain_player_events(&mut self) -> bool {
         let mut notify = false;
         loop {
@@ -267,12 +352,12 @@ impl ActorCore for ErikaEngine {
     type Cmd = ErikaCmd;
     type Event = ErikaEvent;
     type State = ErikaStatus;
-    /// 不用 `Progress`:位置 / 进度这类高频量直读 `Player`(`playback_snapshot()`),
-    /// `watch` 只留给"变了才值得通知"的状态。
-    type Progress = ();
+    /// 进度走自己的 watch 通道:由 `PROGRESS_EVERY` 的节拍驱动(10Hz),
+    /// 位置在引擎侧**算好**再发,读者拿到的是 `ErikaProgress { position, duration }`。
+    type Progress = ErikaProgress;
 
-    fn init_state_and_progress(&self) -> (ErikaStatus, ()) {
-        (self.current_status(), ())
+    fn init_state_and_progress(&self) -> (ErikaStatus, ErikaProgress) {
+        (self.current_status(), self.progress_snapshot())
     }
 }
 
@@ -280,7 +365,7 @@ impl ThreadActor for ErikaEngine {
     fn run(mut self, mut ctx: ActorContext<Self>) {
         loop {
             // 命令 = 要不要出帧由它说;空闲超时也走一遍(没人要帧就什么都不做)
-            let pump = match ctx.recv_cmd_timeout(idle_every()) {
+            let pump = match ctx.recv_cmd_timeout(IDLE) {
                 Ok(cmd) => self.on_cmd(cmd, &ctx),
                 Err(CmdWait::Timeout) => true,
                 Err(CmdWait::Closed) => break, // stop() 或所有句柄都没了
@@ -292,6 +377,12 @@ impl ThreadActor for ErikaEngine {
             }
             // 保活：不管这一轮是被谁唤醒的，按自己的节流跑
             self.keepalive_pump();
+            // 进度：同样按自己的节拍数墙钟，不依赖 erika 发什么事件。
+            // 暂停 / 卡住时算出来的值不变，`publish_progress` 的判等会静默掉。
+            if self.progress.due() {
+                self.progress.mark();
+                self.publish_progress(&ctx);
+            }
             // 诊断（`NSH_ERIKA_TRACE=1`，实现在 `trace.rs`）
             if let Some(probe) = self.tick_probe.as_mut() {
                 // "这一轮到底出帧了没有 / 有没有媒体" —— 卡顿时先看这两个。
@@ -325,6 +416,7 @@ fn new_presenter() -> Result<PresenterRuntime, String> {
     })
     .map_err(|error| format!("PresenterRuntime 创建失败: {error}"))
 }
+
 /// 视频轨的原始尺寸。没有视频轨 / 还没 probe 完就是 `None`。
 fn video_size_of(presenter: &PresenterRuntime) -> Option<(u32, u32)> {
     presenter

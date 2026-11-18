@@ -6,7 +6,7 @@
 //! | 通道 | 语义 | 装什么 | 出口 |
 //! |---|---|---|---|
 //! | 状态 | 最新值,可覆盖,**低频** | [`ErikaStatus`](crate::ErikaStatus) | [`ErikaStatusListener`] |
-//! | 进度 | 最新值,可覆盖,**10Hz** | `ProgressSnapshot` | [`ErikaProgressListener`] |
+//! | 进度 | 最新值,可覆盖,**10Hz** | `ErikaProgress` | [`ErikaProgressListener`] |
 //! | 事件 | 每条尽量必达,**罕见** | [`ErikaEvent`] | [`ErikaEventsListener`] |
 //!
 //! 判据一句话:**要"最新值"走 watch(状态/进度),要"发生过"走 broadcast(事件)。**
@@ -31,7 +31,7 @@
 //! 解码线程、GPU、音频都不会退出,和"最后一个句柄 drop 就干净退出"直接打架。
 //! 所以监听器要的东西(状态、进度、事件)全部**自带数据**,读者不必为了读一个值去持句柄。
 
-use crate::core::player::ErikaStatus;
+use crate::core::player::{ErikaProgress, ErikaStatus};
 
 /// 引擎发出的**语义事件**。
 ///
@@ -100,11 +100,11 @@ impl<T: Clone> ErikaListener<T> {
 /// 引擎**状态**的订阅出口(低频):引擎每处理完一条命令、每收到一个 erika 离散事件发布一次。
 ///
 /// 快照里装的是"一份对得上的完整真相":生命周期、时长、轨道清单的版本号、音量、
-/// 静音、弹幕/字幕配置、错误。**位置不在里面**(它随墙钟走,见 `ProgressSnapshot`)。
+/// 静音、弹幕/字幕配置、错误。**位置不在里面**(它随墙钟走,见 `ErikaProgress`)。
 ///
 /// 两点必须知道:
 ///
-/// - **滞后 ≤ 一次泵周期**(引擎空闲时 10ms,Windows 16ms)+ 那一轮泵的耗时;
+/// - **滞后 ≤ 一次泵周期**(引擎空闲时 16ms)+ 那一轮泵的耗时;
 /// - **过渡态不在里面**(`Opening` 只在 `open()` 阻塞期间存在,而那期间引擎不会发布)。
 ///   要"打开中"这种态,由调用方乐观更新,或者直读 `player.state()`。
 ///
@@ -120,9 +120,25 @@ impl<T: Clone> ErikaListener<T> {
 /// ```
 pub type ErikaStatusListener = ErikaListener<ErikaStatus>;
 
-// TODO(进度通道)：`ProgressSnapshot`（`clock` + `duration`）落地后解开这一行。
-// 它和 `ErikaStatusListener` 的唯一区别是发布频率（10Hz）和"值是时钟、读者自己求值"。
-// pub type ErikaProgressListener = ErikaListener<ProgressSnapshot>;
+/// 引擎**进度**的订阅出口(10Hz):位置 + 总时长,引擎已经算好。
+///
+/// 和 [`ErikaStatusListener`] 的区别只有一条:**频率**。播放中由 erika 的
+/// `PositionChanged` 当节拍节流到 10Hz;暂停时它不来,所以 pause / seek / 变速之后
+/// 由命令路径补发一次(否则读者会一直看着旧位置)。
+///
+/// 只想要"最准的位置"就别订阅 —— 直读 [`ErikaPlayer::position`](crate::ErikaPlayer::position)
+/// 是一次锁、永远新鲜。120ms 的延迟对进度条和时间文字无感,对帧级工具才有感。
+///
+/// ```ignore
+/// let mut progress = player.subscribe_progress();
+/// spawn(async move {
+///     while let Some(p) = progress.next().await {
+///         position.set(p.position);      // 已经算好，不用自己取时刻
+///         duration.set(p.duration);
+///     }
+/// });
+/// ```
+pub type ErikaProgressListener = ErikaListener<ErikaProgress>;
 
 /// 引擎**事件**流的订阅出口:[`ErikaPlayer::subscribe_events`](crate::ErikaPlayer::subscribe_events) 返回它。
 ///

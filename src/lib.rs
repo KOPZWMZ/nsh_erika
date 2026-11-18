@@ -30,8 +30,8 @@
 //!
 //! [`ErikaPlayer`] 同时握着 `erika::Player`(presenter 内部那个的克隆)和一条命令通道:
 //!
-//! - **读**直连 `Player`:`state()` / `intent_state()` / `playback()` / `media_time()` /
-//!   `duration()` / `tracks()` / `chapters()` ……
+//! - **读**直连 `Player`:`state()` / `position()` / `duration()` / `is_playing()` /
+//!   `tracks()` / `chapters()` ……(进度那一组用 `progress()`)
 //! - **写**几乎全走队列,因为 `Player` 只管解码侧:暂停要 cork 音频设备、seek 要
 //!   flush 音频环、变速要让音频做 time-stretch —— 只有持有 `audio_output` 的
 //!   presenter 做得出来。
@@ -136,11 +136,12 @@ mod linux;
 mod windows;
 pub use backend::native_view::ErikaView;
 pub use core::listener::{
-    ErikaEvent, ErikaEventsListener, ErikaListener, ErikaStatusListener,
+    ErikaEvent, ErikaEventsListener, ErikaListener, ErikaProgressListener, ErikaStatusListener,
 };
 pub use core::player::{
     BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuSnapshot,
-    DanmakuText, ErikaDanmaku, ErikaPlayer, ErikaStatus, ErikaSubtitle, ErikaTracks, FilterRule,
+    DanmakuText, ErikaDanmaku, ErikaPlayer, ErikaProgress, ErikaStatus, ErikaSubtitle,
+    ErikaTracks, FilterRule,
     SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
 };
 pub use core::source::{ErikaVideoSource, FrameImage, FrameRequest};

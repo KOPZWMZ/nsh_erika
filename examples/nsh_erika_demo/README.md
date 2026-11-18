@@ -47,11 +47,11 @@ cargo run                                    # 不经 nsh 的宿主，直接跑�
 | 按钮 | 调用 | 顺便验的东西 |
 |---|---|---|
 | 播放 / 暂停 | `play()` / `pause()` | 暂停→播放的过渡 |
-| -10s / +10s | `seek(media_time() ± 10s)` | **暂停时 seek 能不能刷新** |
+| -10s / +10s | `seek(position() ± 10s)` | **暂停时 seek 能不能刷新** |
 | 音量 - / + | `set_volume(± 0.1)` | 音频输出 |
 | 静音 / 取消静音 | `set_muted(bool)` | 静音不改 `volume` 的语义 |
 | 停止 | `stop()` | 停播后帧被作废 |
-| 状态行 | `media_time` / `duration` / `volume` / `last_error` | 失败可见（`status.error` 直接显示） |
+| 状态行 | `position` / `duration` / `volume` / `last_error` | 失败可见（`status.error` 直接显示） |
 
 状态不是"猜"的：`set_interval(200ms)` 从引擎拉一次写进信号，按钮按下时再乐观写一遍。
 

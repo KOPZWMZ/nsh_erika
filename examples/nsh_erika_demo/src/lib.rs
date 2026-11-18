@@ -86,7 +86,7 @@ pub fn App() -> impl IntoElement {
     // 2) 控制条的状态：引擎是异步 actor，UI **不去猜**状态，每 200ms 拉一次。
     //    按钮按下时也会立刻写一遍（否则要等下一次轮询才看到反馈）。
     let playing = signal(player.is_playing());
-    let position = signal(player.media_time().as_secs_f64());
+    let position = signal(player.position().as_secs_f64());
     let duration = signal(player.duration().map_or(0.0, |d| d.as_secs_f64()));
     let volume = signal(player.volume());
     let muted = signal(player.is_muted());
@@ -97,7 +97,7 @@ pub fn App() -> impl IntoElement {
     // 它攥着的那个 `ticker` clone 也跟着释放（最后一个句柄走了引擎就退出）。
     set_interval(Duration::from_millis(200), move || {
         playing.set(ticker.is_playing());
-        position.set(ticker.media_time().as_secs_f64());
+        position.set(ticker.position().as_secs_f64());
         duration.set(ticker.duration().map_or(0.0, |d| d.as_secs_f64()));
         volume.set(ticker.volume());
         muted.set(ticker.is_muted());
@@ -118,13 +118,13 @@ pub fn App() -> impl IntoElement {
 
     let p_back = player.clone();
     let back = move || {
-        let now = p_back.media_time();
+        let now = p_back.position();
         p_back.seek(now.saturating_sub(Duration::from_secs(10)));
     };
 
     let p_forward = player.clone();
     let forward = move || {
-        let now = p_forward.media_time();
+        let now = p_forward.position();
         p_forward.seek(now + Duration::from_secs(10));
     };
 

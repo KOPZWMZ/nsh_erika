@@ -81,7 +81,7 @@ use crate::core::source::{ErikaVideoSource, FrameSlot, Request};
 use actor_lite::ActorHandle;
 
 use erika::presenter::PresenterRuntime;
-use erika::{ChapterInfo, MediaRequest, PlaybackSnapshot, PlayerState, TrackInfo, TrackSelection};
+use erika::{ChapterInfo, MediaRequest, PlayerState, TrackInfo, TrackSelection};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -166,7 +166,7 @@ const CALL_WITH_TIMEOUT: Duration = Duration::from_millis(200);
 ///
 /// 两条读法并存，分工是**粒度**，不是重复：
 ///
-/// - **点查**（直连 `erika::Player`，零延迟、不克隆）：`state()` / `media_time()` /
+/// - **点查**（直连 `erika::Player`，零延迟、不克隆）：`state()` / `position()` /
 ///   `duration()` / `is_playing()` / `tracks()` —— 要"此刻一个值"就用它们；
 /// - **组查**（就是本结构）：一次拿到一组**同一瞬间**的值，外加"变了"的通知
 ///   （[`subscribe_status`](ErikaPlayer::subscribe_status)）。要"一组对得上、还会告诉我变了"
@@ -174,10 +174,10 @@ const CALL_WITH_TIMEOUT: Duration = Duration::from_millis(200);
 ///
 /// 三条限制，写进签名也写不到，只能靠这段话：
 ///
-/// 1. **滞后 ≤ 一次泵周期**（引擎空闲 10ms，Windows 16ms）+ 那一轮泵的耗时；
+/// 1. **滞后 ≤ 一次泵周期**（引擎空闲 16ms）+ 那一轮泵的耗时；
 /// 2. **过渡态不在里面**：`Opening` 只在 `open()` 阻塞期间存在，而那时引擎不会发布 ——
 ///    要"打开中"请用调用方的乐观更新，或直读 [`state`](ErikaPlayer::state)；
-/// 3. **位置不在里面**：它随墙钟走，属于进度通道（10Hz 的 `ProgressSnapshot`）。
+/// 3. **位置不在里面**：它随墙钟走，属于进度通道（10Hz 的 `ErikaProgress`）。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ErikaStatus {
     /// 在不在播（**已提交**状态，不是意图）。按钮标签请配调用方自己的乐观 signal。
@@ -199,7 +199,23 @@ pub struct ErikaStatus {
     /// 最近一次失败（控制面 + 出帧路径）。
     pub error: Option<String>,
 }
-
+/// 进度快照：位置 + 总时长，**引擎已经算好**，读者直接用（没有方法、没有 `Instant`）。
+///
+/// 最坏延迟 = 节流间隔（100ms）+ 一次泵耗时。要帧级精确请直读
+/// [`ErikaPlayer::position`]（一次锁、永远新鲜），两条路各管一件事：
+///
+/// - **订阅 / 轮询进度** → 用它（10Hz，值已算好，`position.set(p.position)` 就完了）；
+/// - **帧级精确**（波形游标、逐帧步进、A/B 点）→ [`position`](ErikaPlayer::position)。
+///
+/// 两个字段来自**同一次采样**，所以进度条可以放心用 `position / duration` 相除，
+/// 不会出现 `position > duration` 的那一帧。
+#[derive(Clone, Debug, Default, PartialEq)] // PartialEq 是给引擎侧判等用的，别省
+pub struct ErikaProgress {
+    /// 采样那一刻的位置。
+    pub position: Duration,
+    /// 总时长（`None` = 还没 probe 完 / 没有媒体）。
+    pub duration: Option<Duration>,
+}
 /// 播放器句柄:**只管控制与状态**,碰不到帧(帧走 [`crate::ErikaVideoSource`])。
 ///
 /// `Clone` 成本极低(两次引用计数 +1),可以随便传,也可以跨线程用。
@@ -448,10 +464,12 @@ impl ErikaPlayer {
         self.send_settings(SettingsCmd::Rate(rate));
     }
 
-    /// 当前**生效**的倍速 —— 从 `PlaybackSnapshot::clock` 直读(播放中 2ms 更新、暂停 50ms)。
-    /// 刚 `set_rate` 之后可能还是旧值:worker 提交后才变。
+    /// 当前**生效**的倍速 —— 直读 `PlaybackSnapshot::clock`(播放中 2ms 更新、暂停 50ms)。
+    ///
+    /// 刚 `set_rate` 之后可能还是旧值:变速要经过"音频环 time-stretch + 时钟换斜率",
+    /// worker 提交后才变。
     pub fn rate(&self) -> f64 {
-        self.playback().clock.rate()
+        self.player.playback_snapshot().clock.rate()
     }
 
     /// 订阅**事件流**(罕见、必须被看见的边沿):播完了、出错了。
@@ -475,6 +493,23 @@ impl ErikaPlayer {
         crate::ErikaStatusListener::new(self.slot.engine.handle.state_rx())
     }
 
+    /// 订阅**进度**(10Hz):位置 + 总时长,引擎已经算好。
+    ///
+    /// 播放中由 erika 的 `PositionChanged` 当节拍;暂停/seek/变速之后由命令路径补发一次。
+    /// 只想要"最准的位置"就别订阅 —— 直读 [`position`](Self::position) 一次锁、永远新鲜。
+    ///
+    /// ```ignore
+    /// let mut progress = player.subscribe_progress();
+    /// spawn(async move {
+    ///     while let Some(p) = progress.next().await {
+    ///         position.set(p.position);
+    ///         duration.set(p.duration);
+    ///     }
+    /// });
+    /// ```
+    pub fn subscribe_progress(&self) -> crate::ErikaProgressListener {
+        crate::ErikaProgressListener::new(self.slot.engine.handle.progress_rx())
+    }
     /// 在引擎线程上对 `PresenterRuntime` 执行一段操作 —— **presenter 独有 API 的逃生口**。
     ///
     /// 常用能力已经有真方法了(播放控制 / 音量 / 倍速 / 轨道 / 字幕 / 弹幕),那些**优先用**
@@ -524,17 +559,24 @@ impl ErikaPlayer {
         self.player.state()
     }
 
-    /// 一次锁拿到「时钟 + generation + state」。进度条每帧调这个,
-    /// 再用 `snapshot.media_time()` 求值 —— 插值是上游算好的,不用自己写。
-    pub fn playback(&self) -> PlaybackSnapshot {
-        self.player.playback_snapshot()
-    }
-
-    /// 当前位置(采样值)。要 60fps 平滑请用 [`playback`](Self::playback)。
-    pub fn media_time(&self) -> Duration {
+    /// 当前位置(一个数):**直读** `Player`，一次锁、永远新鲜。
+    ///
+    /// 上游叫 `current_media_time`，同一个东西 —— 我们这层统一用 `position`:
+    /// **`position` 是一个数,`progress` 是一组数**。
+    ///
+    /// 和 [`progress`](Self::progress) 的分工:这个精确到此刻,但它和
+    /// [`duration`](Self::duration) 是两次锁,同时读可能撕裂(上游 `playback_snapshot()`
+    /// 就是为这个存在的)。所以**进度条 / 时间文字用 `progress()`**(同一次采样、10Hz),
+    /// 帧级精确(波形游标、逐帧步进、A/B 点)才用这个。
+    pub fn position(&self) -> Duration {
         self.player.current_media_time()
     }
 
+    /// 当前进度(引擎算好的快照,10Hz 刷新)。订阅版见
+    /// [`subscribe_progress`](Self::subscribe_progress)。
+    pub fn progress(&self) -> ErikaProgress {
+        self.slot.engine.handle.get_progress()
+    }
     /// 总时长。**`stop()` 之后不会变 `None`**(媒体还开着)——
     /// 判断"有没有视频"请用 [`state`](Self::state) 或 [`has_media`](Self::has_media)。
     pub fn duration(&self) -> Option<Duration> {

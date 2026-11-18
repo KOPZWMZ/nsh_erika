@@ -68,7 +68,7 @@ fn reopen_same_file_resets_playback() {
     wait(&s.player, |p| p.is_playing(), "等待开始播放");
     std::thread::sleep(Duration::from_millis(300)); // 让它真的播一会儿
     assert!(
-        s.player.media_time() > Duration::from_millis(100),
+        s.player.position() > Duration::from_millis(100),
         "前置：位置应该已经前进"
     );
     let before = s.player.generation();
@@ -80,7 +80,7 @@ fn reopen_same_file_resets_playback() {
     );
     assert!(s.player.last_error().is_none(), "重复打开媒体不应该有错误");
     assert!(
-        s.player.media_time() < Duration::from_millis(500),
+        s.player.position() < Duration::from_millis(500),
         "重开应把位置归零 —— 如果这条挂了，说明同 uri 的 open 被当成 no-op 吞掉了"
     );
 }
@@ -91,7 +91,7 @@ fn change_media() {
     wait(&s.player, |p| p.is_playing(), "等待开始播放");
     std::thread::sleep(Duration::from_millis(300)); // 让它真的播一会儿
     assert!(
-        s.player.media_time() > Duration::from_millis(100),
+        s.player.position() > Duration::from_millis(100),
         "前置：位置应该已经前进"
     );
     let before = s.player.generation();

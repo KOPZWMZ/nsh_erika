@@ -27,10 +27,9 @@
 //! 音频改由保活泵喂。**要不要换别的播放实现由调用者决定** —— 这个库只负责上报。
 //!
 //! 「要不要出帧 / 保活泵」这套策略是跨平台的，分平台的只有两件事：「怎么导出这一帧」，
-//! 以及 Windows 上「没有宿主 tick 时谁来泵」（`WINDOWS_PUMP_EVERY` / `WINDOWS_IDLE`）。
+//! 以及 Windows 上「没有宿主 tick 时谁来泵」（`FRAME_EVERY`，那条泵同时就是画面节奏）。
 
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 use actor_lite::ActorContext;
 
@@ -82,7 +81,7 @@ impl ErikaEngine {
                 self.frames.publish(Arc::new(FrameImage::Dmabuf(frame)));
                 self.last_rendered = true;
                 //重置音频泵的计时
-                self.last_keepalive = Instant::now();
+                self.keepalive.mark();
                 None
             }
             Ok(None) => None, // 暂停/无新帧：保留上一张
@@ -103,7 +102,7 @@ impl ErikaEngine {
             match self.presenter.render_tick(time) {
                 Ok(_) => {
                     self.keepalive_failed = false;
-                    self.last_keepalive = Instant::now();
+                    self.keepalive.mark();
                     self.publish_win_frame();
                     None
                 }
@@ -195,7 +194,7 @@ impl ErikaEngine {
     ///
     /// 只在播放中做 —— 暂停时 `render_tick` 泵不出任何音频,白花合成的时间。
     pub(super) fn keepalive_pump(&mut self) {
-        if self.last_keepalive.elapsed() < super::pump_every() {
+        if !self.keepalive.due() {
             return;
         } // 纯算术
         if !self.presenter.player().has_open_media() {
@@ -204,7 +203,7 @@ impl ErikaEngine {
         if !self.presenter.is_playing() {
             return;
         }
-        self.last_keepalive = Instant::now();
+        self.keepalive.mark();
         let time = self.presenter.media_time().as_secs_f64();
         match self.presenter.render_tick(time) {
             // 边沿标记：失败记一次，成功后复位，下次再坏才会再报。
