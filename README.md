@@ -144,6 +144,10 @@ cargo test --doc                     # 文档示例
 bash scripts/test-integration.sh     # 集成测试（需要 GPU + /dev/dri）
 ```
 
+## 更新记录
+
+每个版本的对外变更见 [CHANGELOG.md](CHANGELOG.md)（破坏性变更写在最前面）。
+
 ## 许可
 
 本仓库以 **MIT OR Apache-2.0** 双许可发布，任选其一：
