@@ -28,7 +28,7 @@
 [dependencies]
 nsh-core = "0.5.1"
 nsh-base = "0.5.1"                    
-nsh-erika = { git = "https://github.com/KOPZWMZ/nsh_erika", tag = "v0.1.0" }
+nsh-erika = { git = "https://github.com/KOPZWMZ/nsh_erika", tag = "v0.2.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = { version = "0.5.1", default-features = false }

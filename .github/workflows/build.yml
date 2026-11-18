@@ -28,11 +28,32 @@ jobs:
       - name: 编译体检
         run: cargo test --no-run
 
+      # 两套 feature 都要能编：默认（逃生舱关闭）+ escape-hatch（全功能）。
+      # 后者会连带编译 examples/lifecycle（它有 required-features），默认下它不编。
+      - name: 编译体检（两套 feature，硬失败）
+        run: |
+          cargo check --all-targets
+          cargo check --all-targets --features escape-hatch
+
       - name: 单元测试（毫秒级，硬失败）
         run: cargo test --lib
 
+      # 逃生舱打开后的单元测试（弹幕分组那批会走被 gate 的路径）
+      - name: 单元测试（escape-hatch，硬失败）
+        run: cargo test --lib --features escape-hatch
+
       - name: 文档测试（硬失败）
         run: cargo test --doc
+
+      # `cargo test --doc` 只跑 doctest，不会让断链失败；这里单独把
+      # broken_intra_doc_links 提成 error，两套 feature 各查一遍 ——
+      # 逃生舱关掉时最容易断（被 gate 的类型在别处还被引用）。
+      - name: 文档链接（两套 feature，断链即失败）
+        env:
+          RUSTDOCFLAGS: --deny rustdoc::broken_intra_doc_links
+        run: |
+          cargo doc --no-deps
+          cargo doc --no-deps --features escape-hatch
 
       # 集成测试的清单在脚本里的 TESTS 数组：加新用例改那一处即可。
       - name: 集成测试（硬失败）
