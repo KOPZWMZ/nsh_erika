@@ -19,10 +19,10 @@ impl ErikaEngine {
     pub(super) fn on_playback(&mut self, cmd: PlaybackCmd, ctx: &ActorContext<Self>) {
         match cmd {
             PlaybackCmd::Open(req) => self.open(req, ctx),
-            PlaybackCmd::Stop => self.stop(),
-            PlaybackCmd::Play => self.control("play", PresenterRuntime::play),
-            PlaybackCmd::Pause => self.control("pause", PresenterRuntime::pause),
-            PlaybackCmd::Seek(pos) => self.control("seek", move |p| p.seek(pos)),
+            PlaybackCmd::Stop => self.stop(ctx),
+            PlaybackCmd::Play => self.control(ctx, "play", PresenterRuntime::play),
+            PlaybackCmd::Pause => self.control(ctx, "pause", PresenterRuntime::pause),
+            PlaybackCmd::Seek(pos) => self.control(ctx, "seek", move |p| p.seek(pos)),
         }
     }
 
@@ -63,7 +63,7 @@ impl ErikaEngine {
             }
             Err(e) => {
                 // 锁外阻塞
-                self.error = Some(format!("open: {e}"));
+                self.fail(ctx, format!("open: {e}"));
             }
         }
         self.publish(ctx);
@@ -71,7 +71,7 @@ impl ErikaEngine {
 
     /// 停播。状态由 erika 自己维护:停完是 `PlayerState::Stopped`,而**媒体仍然开着**
     /// (`has_open_media()` 为 true、`duration` 还在、位置归 0)。
-    fn stop(&mut self) {
+    fn stop(&mut self, ctx: &ActorContext<Self>) {
         // 没媒体时**什么都不做**：不投命令、不报错。
         // 命令队列保序，所以这里读到的是真实状态（Open 已经执行过），不是意图。
         if !self.presenter.player().has_open_media() {
@@ -80,6 +80,6 @@ impl ErikaEngine {
         // 画面作废 + 复位请求旗标，否则 stop 之后第一条 Wake 可能把旧帧又推出去
         self.frames.clear();
         self.request.want_frame.store(false, Ordering::Release);
-        self.control("stop", PresenterRuntime::stop);
+        self.control(ctx, "stop", PresenterRuntime::stop);
     }
 }

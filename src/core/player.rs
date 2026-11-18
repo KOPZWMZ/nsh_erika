@@ -13,7 +13,7 @@
 //!
 //! - **读**全部直连 `erika::Player`:零延迟、真推送、不用二次缓存 ——
 //!   [`state`](ErikaPlayer::state) / [`intent_state`](ErikaPlayer::intent_state) /
-//!   [`playback`](ErikaPlayer::playback) / [`tracks`](ErikaPlayer::tracks) 等;
+//!   [`progress`](ErikaPlayer::progress) / [`tracks`](ErikaPlayer::tracks) 等;
 //! - **写**几乎全部走队列,因为 `Player` 只管**解码侧**:暂停要 cork 音频设备、
 //!   seek 要 flush 音频环、变速要让音频做 time-stretch —— 这三件事只有持有
 //!   `audio_output` 的 presenter 做得出来,而它的协调方法全是 private。
@@ -162,31 +162,42 @@ fn shutdown_engine(handle: &ActorHandle<ErikaEngine>) {
 /// 拿不到就返回 `None`,由调用方决定要不要重试。
 const CALL_WITH_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// 引擎视角的**状态快照**：一份"对得上"的完整真相。
+/// 引擎视角的**状态快照**：presenter 侧那一半真相 + 几个方便字段。
 ///
 /// 两条读法并存，分工是**粒度**，不是重复：
 ///
 /// - **点查**（直连 `erika::Player`，零延迟、不克隆）：`state()` / `position()` /
 ///   `duration()` / `is_playing()` / `tracks()` —— 要"此刻一个值"就用它们；
 /// - **组查**（就是本结构）：一次拿到一组**同一瞬间**的值，外加"变了"的通知
-///   （[`subscribe_status`](ErikaPlayer::subscribe_status)）。要"一组对得上、还会告诉我变了"
-///   就用它。
+///   （[`subscribe_status`](ErikaPlayer::subscribe_status)）。其中**只有 presenter 侧的
+///   那几项**（`volume` / `muted` / `danmaku` / `subtitle` / `error`）必须从这里拿。
 ///
-/// 三条限制，写进签名也写不到，只能靠这段话：
+/// 四条限制，写进签名也写不到，只能靠这段话：
 ///
-/// 1. **滞后 ≤ 一次泵周期**（引擎空闲 16ms）+ 那一轮泵的耗时；
-/// 2. **过渡态不在里面**：`Opening` 只在 `open()` 阻塞期间存在，而那时引擎不会发布 ——
+/// 1. **只在命令路径上发布**：`is_playing` / `duration` / `selection` 在**上游自己**
+///    改变状态时（自然播完、erika 侧报错）会停在旧值 —— 要准就直读
+///    [`is_playing`](ErikaPlayer::is_playing) / [`duration`](ErikaPlayer::duration) /
+///    [`tracks`](ErikaPlayer::tracks)。这一路只保证"命令处理完之后是新的"；
+/// 2. **滞后 ≤ 一次泵周期**（引擎空闲 16ms）+ 那一轮泵的耗时；
+/// 3. **过渡态不在里面**：`Opening` 只在 `open()` 阻塞期间存在，而那时引擎不会发布 ——
 ///    要"打开中"请用调用方的乐观更新，或直读 [`state`](ErikaPlayer::state)；
-/// 3. **位置不在里面**：它随墙钟走，属于进度通道（10Hz 的 `ErikaProgress`）。
+/// 4. **位置不在里面**：它随墙钟走，属于进度通道（10Hz 的 `ErikaProgress`）。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ErikaStatus {
     /// 在不在播（**已提交**状态，不是意图）。按钮标签请配调用方自己的乐观 signal。
+    ///
+    /// ⚠️ 自然播完之后这里可能仍是 `true`（上游自己改状态时不发布）——
+    /// 要准请直读 [`is_playing`](ErikaPlayer::is_playing)。
     pub is_playing: bool,
     /// 总时长。`stop()` 之后**不会**变 `None`（媒体还开着）；没有媒体才是 `None`。
+    ///
+    /// ⚠️ 上游迟到才 probe 出时长时（流式源）这里不会自己更新，要准请直读
+    /// [`duration`](ErikaPlayer::duration)。
     pub duration: Option<Duration>,
     /// 当前轨道选择（`{ video, audio, subtitle }`，`None` = 关）。
     ///
-    /// 选轨是**排队**的，所以刚调完 `select_*` 之后这里可能还是旧值（最多滞后一条命令）。
+    /// 选轨是**排队**的，所以刚调完 `select_*` 之后这里可能还是旧值（最多滞后一条命令）；
+    /// 上游自己改选轨（例如内部重置）也不会发布 —— 要准用 `player.tracks().selection()`。
     pub selection: TrackSelection,
     /// 音量（在 presenter 的 `audio_output` 上，`Player` 没有）。
     pub volume: f32,
@@ -196,7 +207,8 @@ pub struct ErikaStatus {
     pub danmaku: DanmakuSnapshot,
     /// 字幕面板的初始化值（同上）。
     pub subtitle: SubtitleSnapshot,
-    /// 最近一次失败（控制面 + 出帧路径）。
+    /// 最近一次失败：控制面、出帧路径、上游解码 / 音频错误（三处都走
+    /// `ErikaEngine::fail`）。`open` 会清它，其余情况下只被下一条错误覆盖。
     pub error: Option<String>,
 }
 /// 进度快照：位置 + 总时长，**引擎已经算好**，读者直接用（没有方法、没有 `Instant`）。
@@ -472,23 +484,34 @@ impl ErikaPlayer {
         self.player.playback_snapshot().clock.rate()
     }
 
-    /// 订阅**事件流**(罕见、必须被看见的边沿):播完了、出错了。
+    /// 订阅**事件流**:erika 的离散事件(状态 / 缓冲 / 轨道 / 选轨 / 错误)逐条转发过来。
     ///
-    /// 事件**不带状态数据**,只负责把 UI 叫醒 —— 醒来后调 [`status`](Self::status) 拉最新值。
-    /// 有 getter 的状态变化不在这里转发:那会把上游 2ms 一条的 `PositionChanged` 也带进来。
-    /// 落后太多时会收到 `Lagged`:直接重拉一次状态即可(状态是 watch,不会丢)。
+    /// 用途是"**在发生的那一刻**知道":弹缓冲指示器、播完切下一集、出错弹提示、
+    /// 轨道变了重读一次。**不是**用来读状态的 —— 收到事件后要值就直读 `player.*()`
+    /// (零延迟),别指望 [`status`](Self::status) 已经刷新。
+    ///
+    /// 高频量不会进来:`PositionChanged` 每 2ms 一条,位置走进度通道
+    /// ([`subscribe_progress`](Self::subscribe_progress))。
+    ///
+    /// 落后太多(事件被丢)时会收到 [`ErikaEvent::Resync`](crate::ErikaEvent::Resync);
+    /// 只有返回 `None` 才是引擎线程没了。
     pub fn subscribe_events(&self) -> crate::ErikaEventsListener {
         crate::ErikaEventsListener::new(self.slot.engine.handle.get_events_rx())
     }
 
-    /// 订阅**状态**(低频):引擎每处理完一条命令、每收到一个 erika 离散事件发布一次。
+    /// 订阅**状态**(低频):**只在命令路径上**发布(每条命令处理完 / 出错 / open 中途)。
     ///
-    /// 快照里装的是一份对得上的完整真相(生命周期 / 时长 / 轨道版本号 / 音量 / 静音 /
-    /// 弹幕字幕配置 / 错误),所以一个订阅任务**不必持有句柄**:页面离开后引擎退出,
-    /// `next()` 返回 `None`,任务自己收摊。
+    /// 拿的是 presenter 侧那几项(音量 / 静音 / 弹幕 / 字幕 / 错误)—— 那几项没有别的读法。
+    /// 快照自带数据,所以订阅任务**不必持有句柄**:页面离开后引擎退出,`next()` 返回
+    /// `None`,任务自己收摊。
     ///
-    /// ⚠️ 只报**订阅之后**的变化 —— 第一件事先调 [`status`](Self::status) 建基线。
-    /// 滞后与过渡态的两条限制见 [`ErikaStatusListener`](crate::ErikaStatusListener)。
+    /// ⚠️ 两个坑:
+    ///
+    /// - 只报**订阅之后**的变化 —— 第一件事先调 [`status`](Self::status) 建基线;
+    /// - **上游自己改状态时这条线是静的**(自然播完、erika 侧报错之后 `is_playing` 会停在
+    ///   旧值)。要准就直读 [`is_playing`](Self::is_playing) / [`duration`](Self::duration)。
+    ///
+    /// 其余限制见 [`ErikaStatusListener`](crate::ErikaStatusListener)。
     pub fn subscribe_status(&self) -> crate::ErikaStatusListener {
         crate::ErikaStatusListener::new(self.slot.engine.handle.state_rx())
     }
@@ -536,7 +559,7 @@ impl ErikaPlayer {
     /// 有了它就不用再自己搭 `mpsc` + 超时(例子以前就是这么绕的)。
     ///
     /// ⚠️ **别放在 60fps 的路径上** —— 它是同步等待,会把 UI 线程拖住;
-    /// 进度条那种高频读用 [`playback`](Self::playback)(直连 `Player`,不经过引擎线程)。
+    /// 进度条那种高频读用 [`position`](Self::position)(直连 `Player`,不经过引擎线程)。
     ///
     /// ```ignore
     /// let frames = player.call_with(|p| p.runtime_snapshot().stats.rendered_video_frames);
@@ -631,9 +654,12 @@ impl ErikaPlayer {
     }
     /// 读 presenter 侧的状态(音量 / 静音 / 弹幕 / 字幕 / 错误)。
     ///
-    /// 来源是 actor 的 `State`:引擎在**每条命令之后**和**收到 erika 离散事件时**各发布
-    /// 一次(不判等,所以可能拿到与上次相同的值),这里是非阻塞 `watch` 读 ——
-    /// **什么时候读都是最新的**,不需要先订阅事件。
+    /// 来源是 actor 的 `State`:引擎在**命令路径上**发布(每条命令处理完 / 出错 / open
+    /// 中途;不判等,所以可能拿到与上次相同的值),这里是**命令侧的最新值**。
+    ///
+    /// ⚠️ 上游**自己**改变状态时不会发布 —— 自然播完之后 `is_playing` 在这里可能仍是
+    /// `true`。要"此刻真值"请直读 [`is_playing`](Self::is_playing) /
+    /// [`state`](Self::state) / [`duration`](Self::duration)。
     ///
     /// 生命周期 / 位置 / 时长 / 轨道**不从这里拿**(那些直连 `Player`,零延迟);
     /// 视频尺寸也不在这里(控件每帧要用,走 `FrameSlot` 的原子)。

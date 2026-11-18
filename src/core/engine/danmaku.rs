@@ -6,6 +6,7 @@
 //! 解析不用我们写:`DanmakuTimeline::parse_auto` 已经能吃 B 站 XML / JSON / JSONL,
 //! 并且自带整份容错契约(缺正文跳过、非法字段回默认、id 顺序分配、u64 精确解析)。
 
+use actor_lite::ActorContext;
 use erika::danmaku::{DanmakuTimeline, DanmakuTrackSource};
 
 use super::ErikaEngine;
@@ -14,11 +15,12 @@ use crate::core::cmd::DanmakuCmd;
 impl ErikaEngine {
     /// 弹幕命令的总入口。
     ///
-    /// 没有 `ctx`:这一族不参与出帧判定,错误由 `run` 后面的发布流程带出去。
-    pub(super) fn on_danmaku(&mut self, cmd: DanmakuCmd) {
+    /// 要 `ctx`:上游这几个都是 `bool` 返回(找不到轨道 = false),失败要走 `fail`
+    /// (状态 + 事件一起写),不是只记一笔。
+    pub(super) fn on_danmaku(&mut self, cmd: DanmakuCmd, ctx: &ActorContext<Self>) {
         match cmd {
             DanmakuCmd::Enabled(on) => self.presenter.set_danmaku_enabled(on),
-            DanmakuCmd::AddTrack { uri, name } => self.add_danmaku_track(uri, name),
+            DanmakuCmd::AddTrack { uri, name } => self.add_danmaku_track(uri, name, ctx),
             DanmakuCmd::UpdateConfig(f) => {
                 // 读改写：UI 不用持有整份 config，也就不会把别的字段冲掉
                 let mut config = self.presenter.danmaku_config().cloned().unwrap_or_default();
@@ -26,16 +28,16 @@ impl ErikaEngine {
                 self.presenter.set_danmaku_config(config);
             }
             DanmakuCmd::Clear => self.presenter.clear_danmaku(),
-            // 上游这几个都返回 `bool`(找不到轨道 = false)。命令是单向的,所以"失败"只能
-            // 通过 `status().error` 告诉 UI —— 这比静默 no-op 好排查。
+            // 上游这几个都返回 `bool`(找不到轨道 = false)。命令是单向的,所以失败只能
+            // 通过 `fail` 告诉 UI(状态 + 事件),比静默 no-op 好排查。
             DanmakuCmd::RemoveTrack(track_id) => {
                 if !self.presenter.remove_danmaku_track(track_id) {
-                    self.error = Some(format!("移除弹幕轨失败:没有 id = {track_id} 的轨道"));
+                    self.fail(ctx, format!("移除弹幕轨失败:没有 id = {track_id} 的轨道"));
                 }
             }
             DanmakuCmd::TrackEnabled { track_id, enabled } => {
                 if !self.presenter.set_danmaku_track_enabled(track_id, enabled) {
-                    self.error = Some(format!("切换弹幕轨失败:没有 id = {track_id} 的轨道"));
+                    self.fail(ctx, format!("切换弹幕轨失败:没有 id = {track_id} 的轨道"));
                 }
             }
             DanmakuCmd::TrackOffset {
@@ -46,7 +48,10 @@ impl ErikaEngine {
                     .presenter
                     .set_danmaku_track_offset(track_id, offset_micros)
                 {
-                    self.error = Some(format!("设置弹幕轨偏移失败:没有 id = {track_id} 的轨道"));
+                    self.fail(
+                        ctx,
+                        format!("设置弹幕轨偏移失败:没有 id = {track_id} 的轨道"),
+                    );
                 }
             }
             DanmakuCmd::GlobalOffset(offset_micros) => {
@@ -61,7 +66,7 @@ impl ErikaEngine {
     /// 而 `read_uri_to_end` 对文件和 http 是同一套接口 —— 两条路必须行为一致。
     ///
     /// 解析在引擎线程上做,所以大文件(十万条 B 站 XML,几百毫秒)不会卡 UI。
-    fn add_danmaku_track(&mut self, uri: String, name: String) {
+    fn add_danmaku_track(&mut self, uri: String, name: String, ctx: &ActorContext<Self>) {
         let parsed = erika::source::read_uri_to_end(&uri)
             .map_err(|error| format!("读取弹幕源失败: {error}"))
             .and_then(|bytes| {
@@ -82,7 +87,7 @@ impl ErikaEngine {
                 self.presenter.add_danmaku_track(timeline, name, source, 0);
             }
             Err(error) => {
-                self.error = Some(error);
+                self.fail(ctx, error);
             }
         }
     }

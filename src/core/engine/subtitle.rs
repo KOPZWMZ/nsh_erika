@@ -15,7 +15,8 @@ use crate::core::cmd::SubtitleCmd;
 impl ErikaEngine {
     /// 字幕命令的总入口。
     ///
-    /// 没有 `ctx`:这一族不参与出帧判定,错误由 `run` 后面的发布流程带出去。
+    /// 不用 `ctx`:这一族**没有失败路径**(两个 setter 都返回 `()`,上游自己在相等时短路),
+    /// 所以不需要 `fail`。加新命令时如果会失败,记得把 `ctx` 一起带上。
     pub(super) fn on_subtitle(&mut self, cmd: SubtitleCmd) {
         match cmd {
             SubtitleCmd::TextStyle(style) => {

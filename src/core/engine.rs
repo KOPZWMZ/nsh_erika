@@ -24,7 +24,7 @@ use crate::core::player::{
 use crate::core::source::{FrameSlot, Request};
 use crate::{ErikaProgress, ErikaStatus};
 use actor_lite::{ActorContext, ActorCore, CmdWait, ThreadActor};
-use crossbeam_channel::{Receiver, TryRecvError};
+use crossbeam_channel::Receiver;
 
 use erika::presenter::{PresenterConfig, PresenterRuntime};
 use erika::{Player, PlayerConfig, PlayerEvent, RendererBackendPreference};
@@ -144,10 +144,11 @@ pub(crate) struct ErikaEngine {
     frames: Arc<FrameSlot>,
     /// 渲染握手（和句柄共享）：要不要帧 / 画布尺寸 / DPI
     request: Arc<Request>,
-    /// 最近一次错误：**只有引擎写**
+    /// 最近一次错误：**只有 [`fail`](Self::fail) 写**
     error: Option<String>,
-    /// erika 的事件流。播放中 `PositionChanged` 每 2ms 一条,所以每 tick 排空并丢弃,
-    /// 只把"离散事件"(状态/轨道/缓冲/错误/播完)当成"该通知 UI"的信号。
+    /// erika 的事件流。播放中 `PositionChanged` 每 2ms 一条,所以每轮排空：
+    /// 白名单里的离散事实（状态 / 缓冲 / 轨道 / 选轨 / 错误）翻译成事件转发，
+    /// 其余（含 `PositionChanged`）直接丢。
     player_events: Receiver<PlayerEvent>,
     /// 上一轮是否真的出了帧(只给 `NSH_ERIKA_TRACE` 探针看,不参与逻辑)
     last_rendered: bool,
@@ -217,15 +218,15 @@ impl ErikaEngine {
         match cmd {
             ErikaCmd::Render(c) => return self.on_render(c, ctx), // Wake → true
             ErikaCmd::Playback(c) => self.on_playback(c, ctx),
-            ErikaCmd::Settings(c) => self.on_settings(c),
-            ErikaCmd::Danmaku(c) => self.on_danmaku(c),
+            ErikaCmd::Settings(c) => self.on_settings(c, ctx),
+            ErikaCmd::Danmaku(c) => self.on_danmaku(c, ctx),
             ErikaCmd::Subtitle(c) => self.on_subtitle(c),
             ErikaCmd::Call(job) => job(&mut self.presenter), // 逃生舱:不代捕错误
-            // 控件侧判断本机出不了帧：记下来（写进 `status.error`，由调用者决定），之后不再尝试出帧。
-            // 错误写进 `self.error` 后由下面统一的 `publish` 带出去。
+            // 控件侧判断本机出不了帧：记下来（由 [`fail`](Self::fail) 同时写状态和事件），
+            // 之后不再尝试出帧。
             ErikaCmd::VideoUnavailable(reason) => {
-                if let Some(reason) = self.latch_video_unavailable(reason) {
-                    self.error = Some(reason);
+                if let Some(message) = self.latch_video_unavailable(reason) {
+                    self.fail(ctx, message);
                 }
             }
         }
@@ -233,14 +234,17 @@ impl ErikaEngine {
 
         false
     }
-    /// 发一条控制命令；失败写进 `error`（没媒体时 erika 会自己报错，不用我们挡）。
+    /// 发一条控制命令；失败走 [`fail`](Self::fail)（没媒体时 erika 会自己报错，不用我们挡）。
+    ///
+    /// 要 `ctx` 不是为了出帧判定，而是因为失败要**同时**写状态和发事件 —— 见 [`fail`](Self::fail)。
     fn control(
         &mut self,
+        ctx: &ActorContext<Self>,
         what: &'static str,
         f: impl FnOnce(&mut PresenterRuntime) -> erika::Result<()>,
     ) {
         if let Err(e) = f(&mut self.presenter) {
-            self.error = Some(format!("{what}: {e}"));
+            self.fail(ctx, format!("{what}: {e}"));
         }
     }
 
@@ -255,9 +259,13 @@ impl ErikaEngine {
         Some(message)
     }
 
-    fn set_error(&mut self, ctx: &ActorContext<Self>, message: String) {
-        self.error = Some(message);
+    /// 失败的唯一出口：记忆 → 状态 → 事件，顺序固定、文案同一份。
+    ///
+    /// 三步的顺序不能换：`status.error` 必须早于事件，否则"事件说错了、状态还是旧的"。
+    fn fail(&mut self, ctx: &ActorContext<Self>, message: String) {
+        self.error = Some(message.clone());
         self.publish(ctx);
+        ctx.send_event(ErikaEvent::Error(message));
     }
     /// 组一份状态（只读 presenter + 自己的字段）
     fn current_status(&self) -> ErikaStatus {
@@ -307,10 +315,13 @@ impl ErikaEngine {
             ctx.update_progress(progress);
         }
     }
-    /// 状态面:把状态发布到 actor 的 `watch`,并给 UI 发一条"变了"的通知。
+    /// 状态面:把状态发布到 actor 的 `watch`(不判等 —— `current_status()` 只是几个小 clone,
+    /// 比较一遍反而更贵;代价是订阅者可能被"值没变"叫醒)。
     ///
-    /// 只在**命令之后**和**erika 离散事件之后**被调用 —— 那两处都是真的发生了点什么，
-    /// 所以不判等：`current_status()` 现在只是几个小 clone，比较一遍反而更贵。
+    /// **只在命令处理路径上调用**(`on_cmd` 末尾、`open` 中途)，外加一个例外
+    /// [`fail`](Self::fail) —— 上游报错时要把文案先写进状态，见那里的注释。
+    /// erika 自己发来的其它离散事件**不经过这里** —— 那些事实走
+    /// [`forward_player_events`] 的事件通道，要读值就直读 `player.*()`。
     fn publish(&mut self, ctx: &ActorContext<Self>) {
         // 尺寸自愈：只在"还不知道"时才查一次 `tracks()`（一次 Vec 分配）。
         // `open` 时通常已经写上了；万一那时轨道还没 probe 完，这里补上。
@@ -318,33 +329,41 @@ impl ErikaEngine {
             self.frames.set_video_size(video_size_of(&self.presenter));
         }
         ctx.update_state(self.current_status());
-        ctx.send_event(ErikaEvent::Changed);
         // 进度必须在这里补一次:pause / seek / rate / open 都会换时钟基准,
         // 而这些变化之后 `PositionChanged` 不一定还会来(暂停就彻底不来了),
         // 少了这一句,进度条会一直停在旧位置。
         self.publish_progress(ctx);
     }
 
-    /// 排空 erika 的事件流。返回"有没有值得通知 UI 的事"。
+    /// 排空 erika 的事件流，把**白名单里的离散事实**翻译成 [`ErikaEvent`] 转发出去。
     ///
-    /// `PositionChanged` 直接丢:播放中它每 2ms 一条(500 条/秒),是个**采样量**不是事实 ——
-    /// 位置由引擎自己的节拍(`PROGRESS_EVERY`)去采。这里只管"变了就得通知"的离散事件。
-    fn drain_player_events(&mut self) -> bool {
-        let mut notify = false;
+    /// 纯转发：这里不判断"该不该通知"，也不更新状态 —— 上游说什么就转什么，
+    /// 只有 [`PlayerEvent::Error`] 是例外（错误文本是我们自己的字段，没有直读口，
+    /// 所以要先写进 `status.error` 再发事件，走 [`fail`](Self::fail)）。
+    ///
+    /// **白名单外一律丢**，其中最重要的是 `PositionChanged`：播放中它每 2ms 一条
+    /// （500 条/秒），是个**采样量**不是事实 —— 位置由进度通道
+    /// （[`PROGRESS_EVERY`] 的节拍）去采。往这个分支里加任何逻辑都会把它带出去。
+    fn forward_player_events(&mut self, ctx: &ActorContext<Self>) {
         loop {
             match self.player_events.try_recv() {
-                Ok(PlayerEvent::PositionChanged(_)) => {}
-                // erika 自己报的错(解码 / 音频 / 播放流程):文本必须留给 UI,
-                // 否则用户只看到 `state() == Error`,看不到原因。
-                Ok(PlayerEvent::Error(error)) => {
-                    self.error = Some(format!("erika: {error}"));
-                    notify = true;
+                Ok(PlayerEvent::StateChanged(state)) => {
+                    ctx.send_event(ErikaEvent::StateChanged(state))
                 }
-                Ok(_) => notify = true, // StateChanged / Ended / TracksChanged / …
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+                Ok(PlayerEvent::BufferingChanged(buffering)) => {
+                    ctx.send_event(ErikaEvent::Buffering(buffering))
+                }
+                Ok(PlayerEvent::TracksChanged(_)) => ctx.send_event(ErikaEvent::TracksChanged), // 不带 Vec
+                Ok(PlayerEvent::TrackSelectionChanged(selection)) => {
+                    ctx.send_event(ErikaEvent::TrackSelectionChanged(selection))
+                }
+                // 唯一的例外：error 是我们自己的字段，没有直读口
+                Ok(PlayerEvent::Error(error)) => self.fail(ctx, format!("erika: {error}")),
+
+                Ok(_) => {}
+                Err(_) => break,
             }
         }
-        notify
     }
 }
 
@@ -373,7 +392,7 @@ impl ThreadActor for ErikaEngine {
             };
 
             if pump && let Some(reason) = self.pump_frame() {
-                self.set_error(&ctx, reason);
+                self.fail(&ctx, reason);
             }
             // 保活：不管这一轮是被谁唤醒的，按自己的节流跑
             self.keepalive_pump();
@@ -390,10 +409,7 @@ impl ThreadActor for ErikaEngine {
                     (self.last_rendered, self.presenter.player().has_open_media());
                 probe.tick(|| format!("render={render} has_media={media}"));
             }
-            // erika 的离散事件(状态/轨道/错误/播完):采样采不到,必须靠事件
-            if self.drain_player_events() {
-                self.publish(&ctx);
-            }
+            self.forward_player_events(&ctx)
         }
     }
 }

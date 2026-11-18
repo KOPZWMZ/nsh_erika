@@ -95,7 +95,7 @@
 //! ```
 //!
 //! 控件**不自建引擎**、也没有任何控制 prop：它的 prop 表只有 `source`（帧源的号）。
-//! 为什么是号而不是句柄 —— NSH 的组件边界只能过 JSON，见 [`video`] 的说明。
+//! 为什么是号而不是句柄 —— NSH 的组件边界只能过 JSON，见 [`ErikaVideo`] 的说明。
 //!
 //! ## 平台
 //!
@@ -140,9 +140,8 @@ pub use core::listener::{
 };
 pub use core::player::{
     BlockedModes, DanmakuDensity, DanmakuFilter, DanmakuPaint, DanmakuPlacement, DanmakuSnapshot,
-    DanmakuText, ErikaDanmaku, ErikaPlayer, ErikaProgress, ErikaStatus, ErikaSubtitle,
-    ErikaTracks, FilterRule,
-    SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
+    DanmakuText, ErikaDanmaku, ErikaPlayer, ErikaProgress, ErikaStatus, ErikaSubtitle, ErikaTracks,
+    FilterRule, SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
 };
 pub use core::source::{ErikaVideoSource, FrameImage, FrameRequest};
 pub use erika::PlayerState;
@@ -163,7 +162,7 @@ pub use erika::{ChapterInfo, TrackInfo, TrackKind, TrackSelection};
 
 /// 原生控件名。
 ///
-/// 一般不用直接写：用 [`video`]（`nsh_erika::video(&source)`）就会带上 `source` prop。
+/// 一般不用直接写：用 [`ErikaVideo`]（`nsh_erika::ErikaVideo(&player)`）就会带上 `source` prop。
 /// 手写时是 `native(nsh_erika::COMPONENT_NAME).prop("source", source.id())`。
 pub const COMPONENT_NAME: &str = "erika.video";
 
@@ -178,7 +177,7 @@ pub fn register(component: &PlatformComponents) {
 impl ErikaPlayer {
     /// 这个播放器的画面：`view().child(player.video().flex_1())`。
     ///
-    /// 和 [`video`] 是同一个东西，只是从播放句柄出发——一个播放器只能有一个画面源，
+    /// 和 [`ErikaVideo`] 是同一个东西，只是从播放句柄出发——一个播放器只能有一个画面源，
     /// 所以不需要另外拿 [`ErikaVideoSource`]。返回的是普通的 NSH 元素，
     /// `.flex_1()` / `.rounded(…)` 这些照常链式调用。
     pub fn video(&self) -> nsh_core::prelude::NativeView {
