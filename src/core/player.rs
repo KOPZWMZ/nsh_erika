@@ -204,6 +204,8 @@ pub struct ErikaStatus {
     /// 上游自己改选轨（例如内部重置）也不会发布 —— 要准用 `player.tracks().selection()`。
     pub selection: TrackSelection,
     /// 音量（在 presenter 的 `audio_output` 上，`Player` 没有）。
+    ///
+    /// 精度是 **f32**（上游 `normalize_volume` 之后的值）。比较请用容差，别用 `< 1e-6`。
     pub volume: f32,
     /// 静音。**不改** `volume`：上游 `set_muted` 只把输出压到 0。
     pub muted: bool,
@@ -443,19 +445,26 @@ impl ErikaPlayer {
     // 轨道与字幕的读写不在这个文件里:它们跨了直连读 / 队列写 / 阻塞直连三种通道,
     // 收在 `ErikaTracks` 句柄(见 `player/tracks.rs`)。
 
-    /// 音量 0.0..=1.0。**立即返回**;`volume()` 在引擎处理完这条命令后就是新值。
+    /// 音量 0.0..=1.0（**f32**）。**立即返回**;`volume()` 在引擎处理完这条命令后就是新值。
     ///
     /// `Player` 上根本没有音量 —— 它住在 presenter 的音频设备上。
-    pub fn set_volume(&self, volume: f64) {
+    ///
+    /// 精度说明:上游 presenter 对外收/发 `f64`(它同时是 Flutter 桥的边界类型),但
+    /// **内部存的是 f32**(`set_volume` 落地时 `normalize_volume(volume as f32)`),
+    /// 所以真实精度就是 f32 —— 这里跟着真实精度走,上行时 `as f64` 无损。
+    pub fn set_volume(&self, volume: f32) {
         if !volume.is_finite() {
             return;
         }
-        self.send_settings(SettingsCmd::Volume(volume.clamp(0.0, 1.0)));
+        self.send_settings(SettingsCmd::Volume(volume.clamp(0.0, 1.0) as f64));
     }
 
-    /// 当前音量(0.0..=1.0)。读的是引擎发布的状态:`watch`,非阻塞,最多滞后一条命令。
-    pub fn volume(&self) -> f64 {
-        self.slot.engine.handle.get_state().volume as f64
+    /// 当前音量(0.0..=1.0,**f32**)。读的是引擎发布的状态:`watch`,非阻塞,最多滞后一条命令。
+    ///
+    /// 它和 [`ErikaStatus::volume`] 是同一个值。比较请用容差(示例里用 `±0.01`)——
+    /// f32 在 0.3 附近的间隔约 `3e-8`,别写 `abs() < 1e-9` 那种永远不成立的判据。
+    pub fn volume(&self) -> f32 {
+        self.slot.engine.handle.get_state().volume
     }
 
     /// 静音开关。**不改变 [`volume`](Self::volume)**:上游 `set_muted` 只把输出压到 0,

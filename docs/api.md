@@ -139,7 +139,7 @@ player.pause();                       // 暂停
 player.set_playing(true);            // 按**目标值**设（幂等；切换请配自己的乐观 signal）
 player.stop();                        // 位置归 0、画面清空，**媒体仍然开着**（能立刻再 play）
 player.seek(Duration::from_secs(30)); // 跳转
-player.set_volume(0.8);               // 0.0..=1.0
+player.set_volume(0.8);               // 0.0..=1.0（f32）
 player.set_muted(true);               // 静音（**不改变** volume）
 player.set_rate(1.5);                 // 倍速
 ```
@@ -194,7 +194,7 @@ player.set_rate(1.5);                 // 倍速
 | `tracks()` / `chapters()` | 轨道列表 / 章节 | 直连 |
 | `has_media()` / `generation()` | 有没有媒体 / 换片计数 | 直连 |
 | `status()` | `state::ErikaStatus`：音量 / 静音 / 弹幕字幕配置 / `error` | 引擎（**命令侧快照**） |
-| `volume()` / `is_muted()` | `status()` 里那两个字段的便捷读法 | 同上 |
+| `volume()` / `is_muted()` | `status()` 里那两个字段的便捷读法（音量是 **f32**，比较用容差） | 同上 |
 | `last_error()` | `status().error` 的快捷方式 | 同上 |
 
 **UI 推荐做法**：低频界面 `set_interval(200ms)` 拉一次就够（按钮按下时再乐观写一遍）；

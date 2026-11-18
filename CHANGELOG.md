@@ -43,6 +43,10 @@
 - **状态通道退成"命令侧快照"**：只在命令路径上发布，上游自己改变状态（自然播完、上游报错）
   时不刷新 —— `is_playing` / `duration` / `selection` 要准请直读 `player.*()`。
 - **失败只有一个出口**：`status.error` 与 `Error` 事件始终同时写、文案同一份。
+- **音量统一到 `f32`**：`set_volume(f32)` / `volume() -> f32` / `ErikaStatus.volume: f32`。
+  上游 presenter 对外是 `f64`（同时也是 Flutter 桥的边界类型），但**内部存的是 f32**
+  （`set_volume` 落地时 `normalize_volume(volume as f32)`），真实精度就是 f32 —— 之前
+  `set_volume(f64)` + `volume() -> f64` 两头都掩盖了这点（写侧静默截断、读侧伪造精度）。
 
 ### 修复
 
@@ -57,6 +61,9 @@
   （`toggle` / `media_time` / `intent_state` / `playback`）。
 - `README.md`：依赖 / 路径 / 逃生舱 / 校验命令对齐。
 - `ErikaTracks::add_external_subtitle` 补顺序警告（见「已知限制」）。
+- 示例应用改成**订阅驱动**（也是新 API 的参考写法）：进度走 `subscribe_progress`（10Hz），
+  播放/暂停由事件 `StateChanged` 的 payload 驱动（**不持句柄**，否则它自己就成了"最后一个
+  句柄"，页面退出时引擎不会退），音量 / 静音 / 错误走 `subscribe_status`。
 
 ### 已知限制
 
