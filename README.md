@@ -94,7 +94,8 @@ view()
 
 **路径**：根上只有"每个 app 都要手写"的几个（`ErikaPlayer` / `ErikaVideo` / `register` /
 `COMPONENT_NAME` / `PlatformComponents` / `MediaRequest` / `PlayerState`）；其余按关注点分模块：
-`danmaku::` `subtitle::` `tracks::` `state::` `events::` `video::`。上游类型走
+`danmaku::` `subtitle::` `tracks::` `state::` `events::` `video::`（`video` 是逃生舱，需要
+`escape-hatch` feature）。上游类型走
 `nsh_erika::erika::…`（**别再自己依赖 liberika**，git rev 对不齐就是两套类型）。
 详见 [docs/api.md](docs/api.md#路径从哪儿-import)。
 

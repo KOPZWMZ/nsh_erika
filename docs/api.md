@@ -34,11 +34,39 @@ view()
 | 轨道：列表 / 选择 / 外挂字幕 | `nsh_erika::tracks::*` |
 | 状态快照 `ErikaStatus` / `ErikaProgress` | `nsh_erika::state::*` |
 | 事件 `ErikaEvent` + 三个 Listener | `nsh_erika::events::*` |
-| 帧源（只有自写控件才用） | `nsh_erika::video::*` |
+| 帧源（只有自写控件才用） | `nsh_erika::video::*` ← **需要 `escape-hatch` feature** |
 | **其它一切上游类型** | `nsh_erika::erika::…`（全量兜底） |
 
 ⚠️ 上游类型**只从 `nsh_erika::erika` 拿**，别在 `Cargo.toml` 里再直接依赖 liberika：
 git rev 对不齐就是两个 crate、两套类型，报错会变成 `expected erika::X, found erika::X`。
+
+---
+
+## 逃生舱（`escape-hatch` feature）
+
+有一小批 API 是**给你绕开封装**用的，默认**不导出** —— 它们出现在 rustdoc 首页，会让新用户
+以为"正常用法需要它们"。要用就开 feature：
+
+```toml
+# 应用自己的 Cargo.toml
+nsh-erika = { path = "…", features = ["escape-hatch"] }
+```
+
+现在它解锁：
+
+| 打开后多出什么 | 用来干什么 |
+|---|---|
+| `video::{ErikaVideoSource, FrameImage, FrameRequest}`（外加平台的 `DmabufFrame` / `SharedTexture`） | 自己写平台控件、或做出帧自检（`request_frame` + `frame_snapshot`）|
+| `ErikaPlayer::video_source()` | 拿帧源句柄 —— 上面那些类型的唯一入口 |
+| `ErikaPlayer::call()` / `call_with()` | 在引擎线程上跑 presenter 独有能力：超分 / HDR / 截图 / HUD，以及还没封装的上游 getter |
+| `ErikaPlayer::raw()` | 裸 `erika::Player`。⚠️ 它的**写方法全部绕过 presenter 的音频协调**（实测：直连 `set_playback_rate` 画面变快声音不变）—— 只用来读 |
+| `danmaku::ErikaDanmaku::update_config()` / `danmaku::DanmakuLayoutConfig` | 上游**整包**样式的写侧（24 字段）。未成组的字段（`scroll_duration_seconds` / `custom_font_face_index` …）只能走它；日常改样式用五组类型化视图。**读**整包也走逃生舱：`player.call_with(\|p\| p.danmaku_config().cloned())` —— 快照里不再放第二份 |
+
+约定：**逃生舱里的东西不进日常路径**。关掉 feature 时它们不是"消失了"，而是"不推荐、
+不承诺"：上游类型照样能从 `nsh_erika::erika::…` 摸到，我们自己的那几个（`ErikaVideoSource`
+等）才真的不导出。
+
+对 99% 的应用来说，正确的做法一直是 `ErikaVideo(&player)` —— 那条路不需要这个 feature。
 
 ---
 
@@ -141,7 +169,7 @@ player.set_rate(1.5);                 // 倍速
 |---|---|---|---|
 | 状态 | presenter 侧：`volume` / `muted` / 弹幕字幕配置 / `error` | `status()` / `subscribe_status()` | **命令侧快照**：只在命令处理完之后是新的 |
 | 进度 | 位置 + 总时长（引擎算好） | `progress()` / `subscribe_progress()` | 10Hz，中间值可丢 |
-| 事件 | erika 的离散事件：状态 / 缓冲 / 轨道 / 选轨 / 错误 | `subscribe_events()` | **每条转发**，晚订阅看不到 |
+| 事件 | erika 的离散事件：状态 / **播完** / 缓冲 / 轨道 / 选轨 / 错误 | `subscribe_events()` | **每条转发**，晚订阅看不到 |
 
 三条规矩：
 
@@ -150,8 +178,10 @@ player.set_rate(1.5);                 // 倍速
 2. **要"发生的那一刻"用事件**——播完切下一集、弹缓冲指示器、出错弹提示；
 3. **事件不刷新状态**：收到事件后 `status()` 里那几项可能还是旧值，读直读方法。
 
-⚠️ **自然播完和 `stop()` 在上游是同一个值**（`PlayerState::Stopped`），本库不替你猜：
-`state() == Stopped` 且 `generation` 没变（`open` / `seek` / `stop` 都会 +1）就是自然播完。
+**播完**有专门的事件：`events::ErikaEvent::Ended`（紧跟在 `StateChanged(Stopped)` 之后，
+上游判好的"媒体自己放完了，不是 `stop()`"）。连播 / 结算用它，**别**拿
+`position ≈ duration` 去猜（seek 到片尾、没有 duration 的源都会误判）。
+要读 level 版用 `raw().is_stopped_at_end()`（逃生舱，默认关闭）。
 
 | 方法 | 语义 | 来源 |
 |---|---|---|
@@ -192,9 +222,8 @@ danmaku.set_enabled(true);
 danmaku.set_track_enabled(track_id, true);
 danmaku.set_track_offset(track_id, -1_500_000);  // 单轨时间偏移（微秒）
 danmaku.set_global_offset(0);
-danmaku.update_config(|config| {                 // 样式/密度/屏蔽，一次改一批
-    config.scroll_speed_factor = 1.2;
-});
+// 整包样式（需要 escape-hatch）：未成组的字段只能这样改；日常用 set_paint/set_text/…
+// danmaku.update_config(|config| { config.scroll_duration_seconds = 8.0; });
 danmaku.clear();
 let snapshot = danmaku.state();                  // 面板初始值：轨道、paint/text/placement/density/filter
 ```
