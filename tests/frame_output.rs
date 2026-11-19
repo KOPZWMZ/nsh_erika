@@ -248,7 +248,7 @@ fn decodes_and_exports_pixels() {
         "open 完成",
     );
 
-    let source = player.session();
+    let source = player.view().expect("会话应该已经登记");
     // 只有真的在播，解码器才会往前吐帧（Ready 状态下拿不到后续帧）。
     player.play();
 

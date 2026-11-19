@@ -47,8 +47,6 @@ use crate::core::{
     engine::ErikaEngine,
 };
 
-use std::sync::Arc;
-
 mod density;
 mod filter;
 mod paint;
@@ -69,27 +67,27 @@ pub use text::DanmakuText;
 /// **读只能读快照**：`erika::Player` 上没有任何弹幕方法（弹幕整块住在 presenter 上），
 /// 所以这里没有"直连读"这条路 —— 写走命令队列，读走引擎发布的状态。
 pub struct ErikaDanmaku {
-    engine: Arc<ActorHandle<ErikaEngine>>,
+    id: u64,
+    engine: ActorHandle<ErikaEngine>,
 }
 impl Clone for ErikaDanmaku {
     fn clone(&self) -> Self {
         Self {
+            id: self.id,
             engine: self.engine.clone(),
         }
     }
 }
 impl PartialEq for ErikaDanmaku {
     fn eq(&self, o: &Self) -> bool {
-        Arc::ptr_eq(&self.engine, &o.engine)
+        self.id == o.id
     }
 }
 impl Eq for ErikaDanmaku {}
 impl ErikaDanmaku {
     /// 建一个句柄（只给 `ErikaPlayer` 用，外部请走 `player.danmaku()`）。
-    pub(super) fn new(engine: ActorHandle<ErikaEngine>) -> Self {
-        Self {
-            engine: Arc::new(engine),
-        }
+    pub(super) fn new(id: u64, engine: ActorHandle<ErikaEngine>) -> Self {
+        Self { id, engine }
     }
     /// 发一条弹幕命令。
     fn send(&self, cmd: DanmakuCmd) {

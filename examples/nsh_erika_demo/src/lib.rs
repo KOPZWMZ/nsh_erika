@@ -1,32 +1,26 @@
 //! The app's Rust UI: its root component, which `nsh run`, `nsh package`
 //! and `cargo run` mount.
 //!
-//! 这是 `nsh-erika` 的示例应用（`nsh_erika_demo`）。它现在同时是**生命周期验证台**：
+//! 这是 `nsh-erika` 的示例应用，同时是**手动验收台**。它有三个页面，分别验证一件事：
 //!
-//! 1. **首页**：两个入口按钮 + 一个实时读数（本进程里 `erika-engine` 线程数、进入次数）。
-//! 2. **播放页**：一块铺满的 `erika.video` + 一条**手动控制条**（播放/暂停、±10s、音量、
-//!    静音、停止）和一个状态行，外加「← 返回」。
+//! | 页面 | 建引擎的是 | 有控制条吗 | 验证什么 |
+//! |---|---|---|---|
+//! | ① 生命周期 | `ErikaPlayer::new()`（页面建） | ❌ 只有「返回」 | **进出页面 = 建/销引擎**（首页有线程数读数） |
+//! | ② 外部句柄 | 同上 | ✅ 句柄方法 | 全能力控制：播放/seek/音量/静音/停止 + 进度与事件订阅 |
+//! | ③ 内部自建 | `erika_video().src(uri)`（组件建） | ✅ 只走 props | 纯声明式：`paused` / `volume` / `muted` / `rate` 就是全部控制面 |
 //!
-//! 播放页是**独立组件**，所以「进入 = 建实例」「返回 = 实例销毁」—— 引擎跟着走。
-//! 反复进出，首页那个线程数应该**回到 0**；回不去就是引擎没被回收。
+//! 三个页面都是**独立组件**，所以「进入 = 建实例」「返回 = 实例销毁」。引擎的生死：
 //!
-//! 播放页有两条路，用来分别验证两种所有权：
-//!
-//! | 入口 | 谁建引擎 | 控制从哪来 |
-//! |---|---|---|
-//! | 外部句柄 | 页面自己 `ErikaPlayer::new()` | 句柄方法（`player.seek()` ……） |
-//! | 组件自建 | `erika_video().src(uri)` | props（`paused` / `muted` / `volume` / `rate`） |
+//! - ①② 的引擎由页面 `ErikaPlayer::new()` 建，句柄里带一张**所有权票据**；组件挂载时
+//!   `adopt()` 认领它，从此关机权归组件 —— 返回即停、摘表、画面解绑。
+//! - ③ 的引擎由组件自己建，守卫直接放在组件 owner 里。
 //!
 //! 片源从环境变量读，方便不改代码就换文件：
 //!
 //! ```sh
 //! TEST_VIDEO=/path/to/video.mkv TEST_DANMAKU=/path/to/danmaku.json nsh run
-//! TEST_DANMAKU=off TEST_VIDEO=/path/to/video.mkv nsh run   # 不挂弹幕（量性能的对照组）
+//! TEST_DANMAKU=off TEST_VIDEO=/path/to/video.mkv nsh run   # 不挂弹幕
 //! ```
-//!
-//! `NSH_PLAYER_BUILTIN=1` 时换成 NSH 自带的 `<video>`（底层 GStreamer），**用来做
-//! 性能对照组**（比 CPU/GPU 占用），不是这个库的降级路径 —— 这个库失败只上报
-//! `status.error`，换不换实现由调用者决定。
 
 use std::time::Duration;
 
@@ -34,6 +28,7 @@ use nsh_base::{button, theme};
 
 use nsh_core::prelude::*;
 use nsh_erika::{PlatformComponents, PlayerState, events::ErikaEvent};
+
 /// The app's UI set (`nsh.json` `"rust"`): what a TSX entry may import from
 /// `nsh_erika_demo/native`.
 #[native_module("nsh_erika_demo/native")]
@@ -54,39 +49,61 @@ fn register_components_window(components: &PlatformComponents) {
     nsh_erika::register(components);
 }
 
-/// 两个页面共用的跳转状态。`Signal` 是 `Copy`，所以整包也能当 context 值随便传。
+/// 当前在哪个页面。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Home,
+    /// ① 只验证创建/销毁：没有控制条。
+    Lifecycle,
+    /// ② 外部句柄 + 控制条。
+    External,
+    /// ③ 组件自建引擎 + props 控制。
+    Internal,
+}
+
+/// 三个页面共用的跳转状态。`Signal` 是 `Copy`，整包塞进 context。
 #[derive(Clone, Copy)]
 struct Pages {
-    /// 在不在播放页。
-    open: Signal<bool>,
-    /// 播放页里由**谁**建引擎：`false` = 页面用句柄（`ErikaPlayer::new()`），
-    /// `true` = 组件自建（`erika_video().src(uri)`，没有句柄）。
-    own: Signal<bool>,
+    page: Signal<Page>,
     /// 进过几次播放页 —— 用来确认"反复进出"真的发生了。
     visits: Signal<u32>,
 }
 
+impl Pages {
+    fn enter(self, page: Page) {
+        self.visits.update(|n| *n += 1);
+        self.page.set(page);
+    }
+    fn back(self) {
+        self.page.set(Page::Home);
+    }
+}
+
 /// 应用根：**只决定"在哪个页面"，不持有任何引擎**。
 ///
-/// 播放页放在 [`when`] 的一个分支里，所以它随条件**建/销**：返回首页 = 实例销毁 =
-/// 它的 `stored` / 订阅任务 / 元素闭包一起释放，引擎的最后一个引用就在这里归零。
+/// 每个页面放在 [`when`] 的一个分支里，所以它随条件建/销：返回首页 = 实例销毁 =
+/// 它建的东西（引擎、订阅任务、元素闭包）一起释放。
 #[component]
 pub fn App() -> impl IntoElement {
     let pages = Pages {
-        open: signal(false),
-        own: signal(false),
+        page: signal(Page::Home),
         visits: signal(0),
     };
     provide_context(pages);
+
+    let on = move |page: Page| computed(move || pages.page.get() == page);
 
     view()
         .flex_col()
         .flex_1()
         .bg(move || theme().background)
-        .child(when(pages.open, || player_page()).otherwise(|| home_page()))
+        .child(when(on(Page::Lifecycle), || lifecycle_page()))
+        .child(when(on(Page::External), || external_page()))
+        .child(when(on(Page::Internal), || internal_page()))
+        .child(when(on(Page::Home), || home_page()))
 }
 
-/// 首页：入口按钮 + 生命周期读数。
+/// 首页：三个入口 + 生命周期读数。
 #[component]
 pub fn HomePage() -> impl IntoElement {
     let pages = use_context::<Pages>().expect("App 应该 provide 了 Pages");
@@ -106,30 +123,26 @@ pub fn HomePage() -> impl IntoElement {
         .justify_center()
         .gap_4()
         .px(px(24.0))
-        .child(
-            text("nsh-erika 生命周期验证")
-                .text_color(move || theme().foreground),
-        )
+        .child(text("nsh-erika 示例").text_color(move || theme().foreground))
         .child(tap(
-            || "进入播放页（外部句柄）".to_string(),
+            || "① 生命周期：进入即建、返回即销（无控制条）".to_string(),
             {
                 let pages = pages;
-                move || {
-                    pages.own.set(false);
-                    pages.visits.update(|n| *n += 1);
-                    pages.open.set(true);
-                }
+                move || pages.enter(Page::Lifecycle)
             },
         ))
         .child(tap(
-            || "进入播放页（组件自建引擎）".to_string(),
+            || "② 外部句柄 + 控制条（ErikaPlayer::new + slot 控制）".to_string(),
             {
                 let pages = pages;
-                move || {
-                    pages.own.set(true);
-                    pages.visits.update(|n| *n += 1);
-                    pages.open.set(true);
-                }
+                move || pages.enter(Page::External)
+            },
+        ))
+        .child(tap(
+            || "③ 组件自建引擎 + props 控制（纯声明式）".to_string(),
+            {
+                let pages = pages;
+                move || pages.enter(Page::Internal)
             },
         ))
         .child(
@@ -141,252 +154,347 @@ pub fn HomePage() -> impl IntoElement {
                 .text_color(move || theme().muted_foreground),
         )
         .child(
-            text("进入 → 返回，重复几次：数字应该回到 0。一个活着的引擎约 30~40 个线程（解码/渲染的子线程继承了线程名），所以别拿 1 当基准。")
+            text("反复进出：数字应该回到 0。一个活着的引擎约 30~40 个线程（子线程继承了线程名），别拿 1 当基准。")
                 .text_color(move || theme().muted_foreground),
         )
 }
 
-/// 播放页：**页面的寿命 = 引擎的寿命**。
-///
-/// 三条路都从同一个 `root` 长出来（同一具体类型，可以直接 `return`）：
-/// 内置 `<video>` 对照组 / 组件自建引擎 / 外部句柄。
+/// ① 只验证创建/销毁：**没有任何控制方法**，进去出画面，返回就销毁。
 #[component]
-pub fn PlayerPage() -> impl IntoElement {
+pub fn LifecyclePage() -> impl IntoElement {
     let pages = use_context::<Pages>().expect("App 应该 provide 了 Pages");
-    let builtin = std::env::var_os("NSH_PLAYER_BUILTIN").is_some();
-    let src = std::env::var("TEST_VIDEO").unwrap_or_else(|_| "../../media/tiny.mkv".to_string());
-    let danmaku_uri =
-        std::env::var("TEST_DANMAKU").unwrap_or_else(|_| "../../media/danmaku.json".to_string());
-    let paused = signal(false);
-
-    // 挂载/卸载各打一行：控制台里能直接对上"进入 → 建引擎"和"返回 → 销毁"。
-    eprintln!("[demo] 播放页挂载（组件自建 = {}）", pages.own.get());
-    cleanup(move || eprintln!("[demo] 播放页卸载：引擎应该开始销毁"));
-
+    let src = test_video();
     let root = view().flex_col().flex_1().bg(move || theme().background);
-
-    // 返回按钮：所有分支共用。它只碰 context 里的信号 —— 不持有引擎。
-    let leave = {
+    let back = {
         let pages = pages;
-        move || pages.open.set(false)
+        move || pages.back()
     };
 
-    // ── 对照组：NSH 自带 <video>（底层 GStreamer）────────────────────────────
-    if builtin {
-        return root
-            .child(
-                video(move || src.clone())
-                    .flex_1()
-                    .controls(true)
-                    .paused(move || paused.get()),
-            )
-            .child(bar().child(tap(|| "← 返回".to_string(), leave)));
-    }
+    let player = match nsh_erika::ErikaPlayer::new() {
+        Ok(player) => player,
+        Err(error) => {
+            eprintln!("[demo] 引擎起不来: {error}");
+            return root
+                .child(text("引擎起不来：看日志").flex_1())
+                .child(bar().child(tap(|| "← 返回".to_string(), back)));
+        }
+    };
+    eprintln!(
+        "[demo] LifecyclePage 挂载：erika 线程数 = {}",
+        engine_threads()
+    );
+    cleanup(move || eprintln!("[demo] LifecyclePage 卸载：引擎应该开始销毁"));
 
-    // ── 组件自建引擎：没有句柄，控制全走 props ────────────────────────────────
-    if pages.own.get() {
-        let toggle_paused = {
-            let paused = paused;
-            move || paused.update(|p| *p = !*p)
-        };
-        return root
+    // 句柄交给组件即完成使命（组件在挂载时认领票据）；这一页不调任何控制方法。
+    root.child(
+        nsh_erika::erika_video()
+            .src(src)
+            .player(player)
+            .flex_1(),
+    )
+    .child(
+        bar()
+            .child(tap(|| "← 返回（销毁引擎）".to_string(), back))
             .child(
-                nsh_erika::erika_video()
-                    .src(src)
-                    .paused(move || paused.get())
-                    .flex_1(),
-            )
-            .child(
-                bar()
-                    .child(tap(
-                        move || {
-                            if paused.get() {
-                                "播放".to_string()
-                            } else {
-                                "暂停".to_string()
-                            }
-                        },
-                        toggle_paused,
-                    ))
-                    .child(tap(|| "← 返回（销毁引擎）".to_string(), leave))
-                    .child(
-                        text("引擎归组件：返回即销毁，没有句柄可用")
-                            .text_color(move || theme().muted_foreground),
-                    ),
-            );
-    }
+                text("这一页没有控制条：只看画面，返回即销毁")
+                    .text_color(move || theme().muted_foreground),
+            ),
+    )
+}
 
-    // ── 外部句柄：从这个页面的**邮箱**里拿，页面销毁时组件把槽清空 ───────────
+/// ② 外部句柄 + 控制条：句柄在页面里建，控制条直接调它的方法。
+#[component]
+pub fn ExternalPage() -> impl IntoElement {
+    let pages = use_context::<Pages>().expect("App 应该 provide 了 Pages");
+    let src = test_video();
+    let danmaku_uri = test_danmaku();
+    let root = view().flex_col().flex_1().bg(move || theme().background);
+    let back = {
+        let pages = pages;
+        move || pages.back()
+    };
+
     if src.is_empty() {
         return root
-            .child(text("没有片源：设 VIDEO").flex_1())
-            .child(bar().child(tap(|| "← 返回".to_string(), leave)));
+            .child(text("没有片源：设 TEST_VIDEO").flex_1())
+            .child(bar().child(tap(|| "← 返回".to_string(), back)));
     }
 
-    // 邮箱：页面建、组件填。它不是句柄，只是一个"填/取"的落点。
-    let slot = nsh_erika::ErikaSlot::new();
-    let playing = signal(false);
-    let position = signal(Duration::ZERO);
-    let duration = signal(None::<Duration>);
-    let volume = signal(1.0_f32);
-    let muted = signal(false);
-    let error = signal(None::<String>);
-
-    // 邮箱是**异步填的**（父级先跑、组件后跑）：等它第一次有值，再把三条订阅接上。
-    // `armed` 是 `Stored`（非响应式），用来保证只订阅一次 —— effect 会随邮箱变化再跑。
-    let armed = stored(false);
-    effect(move || {
-        let Some(player) = slot.player() else { return };
-        if armed.get() {
-            return;
+    // 句柄：**这一行就把引擎建好了**（同步），所以三条订阅可以立刻接 —— 不用等挂载。
+    // 它带一张"所有权票据"：交给组件后，组件在挂载时认领，卸载即销毁。
+    let player = match nsh_erika::ErikaPlayer::new() {
+        Ok(player) => player,
+        Err(error) => {
+            eprintln!("[demo] 引擎起不来: {error}");
+            return root
+                .child(text("引擎起不来：看日志").flex_1())
+                .child(bar().child(tap(|| "← 返回".to_string(), back)));
         }
-        armed.with(|a| *a = true);
+    };
+    eprintln!(
+        "[demo] ExternalPage 挂载：erika 线程数 = {}",
+        engine_threads()
+    );
+    cleanup(move || eprintln!("[demo] ExternalPage 卸载：引擎应该开始销毁"));
 
-        // 初值直读（订阅只报订阅之后的变化）
-        playing.set(player.is_playing());
-        volume.set(player.volume());
-        muted.set(player.is_muted());
-        error.set(player.last_error());
+    let initial = player.progress();
+    let playing = signal(player.is_playing());
+    let position = signal(initial.position);
+    let duration = signal(initial.duration);
+    let volume = signal(player.volume());
+    let muted = signal(player.is_muted());
+    let error = signal(player.last_error());
 
-        // ① 进度：10Hz，位置 + 时长引擎已经算好
-        let mut progress = player.subscribe_progress();
-        spawn(async move {
-            while let Some(p) = progress.next().await {
-                position.set(p.position);
-                duration.set(p.duration);
-            }
-        });
-
-        // ② 事件：只在"发生的那一刻"用
-        let mut events = player.subscribe_events();
-        spawn(async move {
-            while let Some(event) = events.recv().await {
-                match event {
-                    ErikaEvent::StateChanged(state) => {
-                        playing.set(matches!(state, PlayerState::Playing));
-                        println!("状态改变了: {state:?}");
-                    }
-                    ErikaEvent::Ended => {
-                        playing.set(false);
-                        println!("播完了");
-                    }
-                    ErikaEvent::Error(text) => {
-                        error.set(Some(text.clone()));
-                        println!("Erika 引擎出错了: {text}");
-                    }
-                    ErikaEvent::TracksChanged => println!("轨道改变了"),
-                    ErikaEvent::TrackSelectionChanged(_) => println!("选择了轨道"),
-                    ErikaEvent::Buffering(buffering) => println!("缓冲状态: {buffering}"),
-                    ErikaEvent::Resync { missed } => println!("事件落后，丢了 {missed} 条"),
-                    _ => {}
-                }
-            }
-        });
-
-        // ③ presenter 侧的观测量（音量 / 静音 / 错误）
-        let mut status = player.subscribe_status();
-        spawn(async move {
-            while let Some(snapshot) = status.next().await {
-                volume.set(snapshot.volume);
-                muted.set(snapshot.muted);
-                error.set(snapshot.error);
-            }
-        });
-
-        // 弹幕（`DANMAKU=off` 时不挂，做性能对照）
-        if danmaku_uri != "off" && !danmaku_uri.is_empty() {
-            player.danmaku().add_track(danmaku_uri.clone(), "bilibili");
+    // ① 进度：10Hz，位置 + 时长引擎已经算好
+    let mut progress = player.subscribe_progress();
+    spawn(async move {
+        while let Some(p) = progress.next().await {
+            position.set(p.position);
+            duration.set(p.duration);
         }
     });
 
-    // 控制条的每个动作都现取句柄：`None` = 还没挂载 / 已卸载，一律静默丢弃。
-    let toggle = move || {
-        let Some(p) = slot.player() else { return };
-        if playing.get() {
-            p.pause();
-            playing.set(false);
-        } else {
-            p.play();
-            playing.set(true);
+    // ② 事件：只在"发生的那一刻"用（`StateChanged` 自带新状态，所以这条任务不用持句柄）
+    let mut events = player.subscribe_events();
+    spawn(async move {
+        while let Some(event) = events.recv().await {
+            match event {
+                ErikaEvent::StateChanged(state) => {
+                    playing.set(matches!(state, PlayerState::Playing));
+                    println!("状态改变了: {state:?}");
+                }
+                ErikaEvent::Ended => {
+                    playing.set(false);
+                    println!("播完了");
+                }
+                ErikaEvent::Error(text) => {
+                    error.set(Some(text.clone()));
+                    println!("Erika 引擎出错了: {text}");
+                }
+                ErikaEvent::TracksChanged => println!("轨道改变了"),
+                ErikaEvent::TrackSelectionChanged(_) => println!("选择了轨道"),
+                ErikaEvent::Buffering(buffering) => println!("缓冲状态: {buffering}"),
+                ErikaEvent::Resync { missed } => println!("事件落后，丢了 {missed} 条"),
+                _ => {}
+            }
+        }
+    });
+
+    // ③ presenter 侧的观测量（音量 / 静音 / 错误）
+    let mut status = player.subscribe_status();
+    spawn(async move {
+        while let Some(snapshot) = status.next().await {
+            volume.set(snapshot.volume);
+            muted.set(snapshot.muted);
+            error.set(snapshot.error);
+        }
+    });
+
+    // 打开 + 起播（命令进队列，立刻返回）
+    player.open(nsh_erika::MediaRequest::new(src.clone()));
+    player.play();
+    if danmaku_uri != "off" && !danmaku_uri.is_empty() {
+        player.danmaku().add_track(danmaku_uri, "弹幕");
+    }
+
+    // 控制条：句柄 clone 只是引用计数 +1，动作直接调
+    let toggle = {
+        let player = player.clone();
+        move || {
+            if playing.get() {
+                player.pause();
+                playing.set(false);
+            } else {
+                player.play();
+                playing.set(true);
+            }
         }
     };
-    let seek_back = move || {
-        if let Some(p) = slot.player() {
-            let now = p.position();
-            p.seek(now.saturating_sub(Duration::from_secs(10)));
+    let seek_back = {
+        let player = player.clone();
+        move || {
+            let now = player.position();
+            player.seek(now.saturating_sub(Duration::from_secs(10)));
         }
     };
-    let seek_forward = move || {
-        if let Some(p) = slot.player() {
-            p.seek(p.position() + Duration::from_secs(10));
-        }
+    let seek_forward = {
+        let player = player.clone();
+        move || player.seek(player.position() + Duration::from_secs(10))
     };
-    let stop = move || {
-        if let Some(p) = slot.player() {
-            p.stop();
+    let stop = {
+        let player = player.clone();
+        move || {
+            player.stop();
             playing.set(false);
         }
     };
     // 音量按 10% 一档：信号当"下一档"的基准，避免读引擎状态时的滞后。
-    let quieter = move || {
-        let next = (volume.get() - 0.1).max(0.0);
-        if let Some(p) = slot.player() {
-            p.set_volume(next);
+    let quieter = {
+        let player = player.clone();
+        move || {
+            let next = (volume.get() - 0.1).max(0.0);
+            player.set_volume(next);
+            volume.set(next);
         }
-        volume.set(next);
     };
-    let louder = move || {
-        let next = (volume.get() + 0.1).min(1.0);
-        if let Some(p) = slot.player() {
-            p.set_volume(next);
+    let louder = {
+        let player = player.clone();
+        move || {
+            let next = (volume.get() + 0.1).min(1.0);
+            player.set_volume(next);
+            volume.set(next);
         }
-        volume.set(next);
     };
-    let mute = move || {
-        let next = !muted.get();
-        if let Some(p) = slot.player() {
-            p.set_muted(next);
+    let mute = {
+        let player = player.clone();
+        move || {
+            let next = !muted.get();
+            player.set_muted(next);
+            muted.set(next);
         }
-        muted.set(next);
     };
 
-    root.child(nsh_erika::erika_video().src(src.clone()).slot(slot).flex_1())
-        .child(
-            bar()
-                .child(tap(
-                    move || if playing.get() { "暂停" } else { "播放" }.to_string(),
-                    toggle,
-                ))
-                .child(tap(|| "-10s".to_string(), seek_back))
-                .child(tap(|| "+10s".to_string(), seek_forward))
-                .child(tap(|| "音量 -".to_string(), quieter))
-                .child(tap(|| "音量 +".to_string(), louder))
-                .child(tap(
-                    move || {
-                        if muted.get() {
-                            "取消静音"
-                        } else {
-                            "静音"
-                        }
-                        .to_string()
-                    },
-                    mute,
-                ))
-                .child(tap(|| "停止".to_string(), stop))
-                .child(tap(|| "← 返回（销毁引擎）".to_string(), leave))
-                .child(
-                    text(move || {
-                        status_line(
-                            position.get(),
-                            duration.get(),
-                            volume.get(),
-                            muted.get(),
-                            error.get(),
-                        )
-                    })
+    root.child(
+        nsh_erika::erika_video()
+            .src(src)
+            .player(player)
+            .flex_1(),
+    )
+    .child(
+        bar()
+            .child(tap(
+                move || if playing.get() { "暂停" } else { "播放" }.to_string(),
+                toggle,
+            ))
+            .child(tap(|| "-10s".to_string(), seek_back))
+            .child(tap(|| "+10s".to_string(), seek_forward))
+            .child(tap(|| "音量 -".to_string(), quieter))
+            .child(tap(|| "音量 +".to_string(), louder))
+            .child(tap(
+                move || {
+                    if muted.get() {
+                        "取消静音"
+                    } else {
+                        "静音"
+                    }
+                    .to_string()
+                },
+                mute,
+            ))
+            .child(tap(|| "停止".to_string(), stop))
+            .child(tap(|| "← 返回（销毁引擎）".to_string(), back))
+            .child(
+                text(move || {
+                    status_line(
+                        position.get(),
+                        duration.get(),
+                        volume.get(),
+                        muted.get(),
+                        error.get(),
+                    )
+                })
+                .text_color(move || theme().muted_foreground),
+            ),
+    )
+}
+
+/// ③ 组件自建引擎：**没有句柄**，控制全走 props。
+#[component]
+pub fn InternalPage() -> impl IntoElement {
+    let pages = use_context::<Pages>().expect("App 应该 provide 了 Pages");
+    let src = test_video();
+    let root = view().flex_col().flex_1().bg(move || theme().background);
+    let back = {
+        let pages = pages;
+        move || pages.back()
+    };
+
+    let paused = signal(false);
+    let muted = signal(false);
+    let volume = signal(1.0_f32);
+    // 倍速在 0.5 / 1 / 1.5 / 2 之间循环
+    let rate = signal(1.0_f64);
+
+    let toggle_paused = {
+        let paused = paused;
+        move || paused.update(|p| *p = !*p)
+    };
+    let toggle_muted = {
+        let muted = muted;
+        move || muted.update(|m| *m = !*m)
+    };
+    let quieter = {
+        let volume = volume;
+        move || volume.update(|v| *v = (*v - 0.1).max(0.0))
+    };
+    let louder = {
+        let volume = volume;
+        move || volume.update(|v| *v = (*v + 0.1).min(1.0))
+    };
+    let cycle_rate = {
+        let rate = rate;
+        move || {
+            rate.update(|r| {
+                *r = match *r {
+                    x if x < 0.75 => 1.0,
+                    x if x < 1.25 => 1.5,
+                    x if x < 1.75 => 2.0,
+                    _ => 0.5,
+                }
+            })
+        }
+    };
+
+    root.child(
+        nsh_erika::erika_video()
+            .src(src)
+            .paused(move || paused.get())
+            .muted(move || muted.get())
+            .volume(move || volume.get())
+            .rate(move || rate.get())
+            .flex_1(),
+    )
+    .child(
+        bar()
+            .child(tap(
+                move || {
+                    if paused.get() {
+                        "播放".to_string()
+                    } else {
+                        "暂停".to_string()
+                    }
+                },
+                toggle_paused,
+            ))
+            .child(tap(|| "音量 -".to_string(), quieter))
+            .child(tap(|| "音量 +".to_string(), louder))
+            .child(tap(
+                move || {
+                    if muted.get() {
+                        "取消静音".to_string()
+                    } else {
+                        "静音".to_string()
+                    }
+                },
+                toggle_muted,
+            ))
+            .child(tap(move || format!("倍速 {:.1}x", rate.get()), cycle_rate))
+            .child(tap(|| "← 返回（销毁引擎）".to_string(), back))
+            .child(
+                text("引擎归组件：这一页没有句柄，控制全靠 props")
                     .text_color(move || theme().muted_foreground),
-                ),
-        )
+            ),
+    )
+}
+
+/// 片源：`TEST_VIDEO`，默认仓库里的 `media/tiny.mkv`。
+fn test_video() -> String {
+    std::env::var("TEST_VIDEO").unwrap_or_else(|_| "../../media/tiny.mkv".to_string())
+}
+
+/// 弹幕：`TEST_DANMAKU`，`off` = 不挂。
+fn test_danmaku() -> String {
+    std::env::var("TEST_DANMAKU").unwrap_or_else(|_| "../../media/danmaku.json".to_string())
 }
 
 /// 本进程里叫 `erika-engine` 的线程数。
@@ -414,7 +522,7 @@ fn engine_threads() -> usize {
     }
 }
 
-/// 控制条的外壳（两行按钮 + 状态行）。
+/// 控制条的外壳（一行按钮 + 状态行）。
 fn bar() -> nsh_core::element::View {
     view()
         .flex_row()
@@ -440,8 +548,6 @@ fn tap(label: impl Fn() -> String + 'static, on_press: impl Fn() + 'static) -> i
 }
 
 /// 状态行：`1:23 / 4:56 · 音量 80%`，出错时把 `status.error` 接在后面。
-///
-/// 出错是这套适配层最要紧的信号（出帧路径没了就永远没有画面），所以直接显示在看得到的地方。
 fn status_line(
     position: Duration,
     duration: Option<Duration>,
