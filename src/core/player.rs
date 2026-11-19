@@ -262,7 +262,8 @@ impl PartialEq for ErikaPlayer {
 }
 impl Eq for ErikaPlayer {}
 impl ErikaPlayer {
-    /// 建一个播放器:**立刻返回**。画面用 [`ErikaVideo`](crate::ErikaVideo)（`erika_video().player(&player)`）。
+    /// 建一个播放器:**立刻返回**。画面用 [`ErikaVideo`](crate::ErikaVideo)
+    /// （`erika_video().src(uri).slot(slot)`，引擎由组件建，见 [`ErikaSlot`](crate::ErikaSlot)）。
     ///
     /// 引擎线程与 `PresenterRuntime` 的创建都在内部完成(几十毫秒,发生在引擎线程上)。
     /// 此时**没有媒体**。
@@ -305,7 +306,7 @@ impl ErikaPlayer {
     /// 这个会话的**视图侧**（帧邮箱 + 出帧请求）。**需要 `escape-hatch` feature。**
     ///
     /// 一般不用它：画面直接写 [`ErikaVideo`](crate::ErikaVideo)
-    /// （`erika_video().player(&player)`）就行。要"同一个播放器在几处同时显示"（镜像）
+    /// （`erika_video().src(uri).slot(slot)`）就行。要"同一个播放器在几处同时显示"（镜像）
     /// 或者自己管 tick 时才需要。
     #[cfg(feature = "escape-hatch")]
     pub fn session(&self) -> ViewSource {
@@ -318,13 +319,11 @@ impl ErikaPlayer {
         self.inner.id
     }
 
-    /// 按号换回一个句柄：号有效（会话还活着）时 `Some`，卸载后 / 没这个号时 `None`。
-    ///
-    /// **`None` 是正常状态**，不是错误：它同时表示"还没建好"和"已经卸载"，
-    /// 调用方一律按"不可用"处理。
-    pub(crate) fn resolve(id: u64) -> Option<Self> {
-        crate::core::source::owner_of(id).map(|inner| Self { inner })
+    /// 引擎线程还活着没有。邮箱用它过滤"组件卸载后残留的句柄"。
+    pub(crate) fn is_engine_alive(&self) -> bool {
+        self.inner.engine.handle.is_alive()
     }
+
 
     /// 立刻停掉引擎并**等它退完**(最多 `SHUTDOWN_TIMEOUT`)。
     ///

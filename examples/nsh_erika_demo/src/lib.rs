@@ -216,162 +216,149 @@ pub fn PlayerPage() -> impl IntoElement {
             );
     }
 
-    // ── 外部句柄：句柄在这个页面里创建，页面销毁时最后一个 clone 一起走 ─────────
+    // ── 外部句柄：从这个页面的**邮箱**里拿，页面销毁时组件把槽清空 ───────────
     if src.is_empty() {
         return root
             .child(text("没有片源：设 VIDEO").flex_1())
             .child(bar().child(tap(|| "← 返回".to_string(), leave)));
     }
-    let player = match nsh_erika::ErikaPlayer::new() {
-        Ok(player) => {
-            eprintln!(
-                "[demo] 引擎起来了（erika-engine 线程数 = {}）",
-                engine_threads()
-            );
-            player
-        }
-        Err(error) => {
-            eprintln!("erika.video: 引擎起不来: {error}");
-            return root
-                .child(text("引擎起不来：看日志").flex_1())
-                .child(bar().child(tap(|| "← 返回".to_string(), leave)));
-        }
-    };
 
-    // 三条订阅通道，各接一条任务。这是这个库推荐的用法（也是它比轮询强的地方）：
-    //    · **初值直读**（订阅只报订阅之后的变化）
-    //    · **进度** 走 `subscribe_progress`：10Hz，位置 + 时长引擎已经算好
-    //    · **事件** 走 `subscribe_events`：状态变了 / 播完了 / 出错了 —— 而且
-    //      `StateChanged` 自带新状态，所以这条任务**不用持有句柄**
-    //      （持有的话它自己就成了"最后一个句柄"，页面退出时引擎不会退）
-    //    · **presenter 侧的观测量**（音量 / 静音 / 错误）走 `subscribe_status`
-    let initial = player.progress();
-    let playing = signal(player.is_playing());
-    let position = signal(initial.position);
-    let duration = signal(initial.duration);
-    let volume = signal(player.volume());
-    let muted = signal(player.is_muted());
-    let error = signal(player.last_error());
+    // 邮箱：页面建、组件填。它不是句柄，只是一个"填/取"的落点。
+    let slot = nsh_erika::ErikaSlot::new();
+    let playing = signal(false);
+    let position = signal(Duration::ZERO);
+    let duration = signal(None::<Duration>);
+    let volume = signal(1.0_f32);
+    let muted = signal(false);
+    let error = signal(None::<String>);
 
-    // ① 进度：10Hz，值已经算好，直接 set
-    let mut progress = player.subscribe_progress();
-    spawn(async move {
-        while let Some(p) = progress.next().await {
-            position.set(p.position);
-            duration.set(p.duration);
+    // 邮箱是**异步填的**（父级先跑、组件后跑）：等它第一次有值，再把三条订阅接上。
+    // `armed` 是 `Stored`（非响应式），用来保证只订阅一次 —— effect 会随邮箱变化再跑。
+    let armed = stored(false);
+    effect(move || {
+        let Some(player) = slot.player() else { return };
+        if armed.get() {
+            return;
         }
-    });
+        armed.with(|a| *a = true);
 
-    // ② 事件：只在"发生的那一刻"用（这里顺便打印，方便手动按的时候看引擎在说什么）
-    let mut events = player.subscribe_events();
-    spawn(async move {
-        while let Some(event) = events.recv().await {
-            match event {
-                // 自带新状态 → 不用读句柄。这就是 `ErikaStatus` 之外的另一条路。
-                ErikaEvent::StateChanged(state) => {
-                    playing.set(matches!(state, PlayerState::Playing));
-                    println!("状态改变了: {state:?}");
-                }
-                // 自然播完（不是 stop()）。顺序上紧跟 `Stopped`，连播/结算靠它。
-                ErikaEvent::Ended => {
-                    playing.set(false);
-                    println!("播完了");
-                }
-                ErikaEvent::Error(text) => {
-                    error.set(Some(text.clone()));
-                    println!("Erika 引擎出错了: {text}");
-                }
-                ErikaEvent::TracksChanged => println!("轨道改变了"),
-                ErikaEvent::TrackSelectionChanged(_) => println!("选择了轨道"),
-                ErikaEvent::Buffering(buffering) => println!("缓冲状态: {buffering}"),
-                // 落后了：有几条事件被丢，按最坏情况处理、重读一遍直读值即可。
-                ErikaEvent::Resync { missed } => println!("事件落后，丢了 {missed} 条"),
-                _ => {}
+        // 初值直读（订阅只报订阅之后的变化）
+        playing.set(player.is_playing());
+        volume.set(player.volume());
+        muted.set(player.is_muted());
+        error.set(player.last_error());
+
+        // ① 进度：10Hz，位置 + 时长引擎已经算好
+        let mut progress = player.subscribe_progress();
+        spawn(async move {
+            while let Some(p) = progress.next().await {
+                position.set(p.position);
+                duration.set(p.duration);
             }
+        });
+
+        // ② 事件：只在"发生的那一刻"用
+        let mut events = player.subscribe_events();
+        spawn(async move {
+            while let Some(event) = events.recv().await {
+                match event {
+                    ErikaEvent::StateChanged(state) => {
+                        playing.set(matches!(state, PlayerState::Playing));
+                        println!("状态改变了: {state:?}");
+                    }
+                    ErikaEvent::Ended => {
+                        playing.set(false);
+                        println!("播完了");
+                    }
+                    ErikaEvent::Error(text) => {
+                        error.set(Some(text.clone()));
+                        println!("Erika 引擎出错了: {text}");
+                    }
+                    ErikaEvent::TracksChanged => println!("轨道改变了"),
+                    ErikaEvent::TrackSelectionChanged(_) => println!("选择了轨道"),
+                    ErikaEvent::Buffering(buffering) => println!("缓冲状态: {buffering}"),
+                    ErikaEvent::Resync { missed } => println!("事件落后，丢了 {missed} 条"),
+                    _ => {}
+                }
+            }
+        });
+
+        // ③ presenter 侧的观测量（音量 / 静音 / 错误）
+        let mut status = player.subscribe_status();
+        spawn(async move {
+            while let Some(snapshot) = status.next().await {
+                volume.set(snapshot.volume);
+                muted.set(snapshot.muted);
+                error.set(snapshot.error);
+            }
+        });
+
+        // 弹幕（`DANMAKU=off` 时不挂，做性能对照）
+        if danmaku_uri != "off" && !danmaku_uri.is_empty() {
+            player.danmaku().add_track(danmaku_uri.clone(), "bilibili");
         }
     });
 
-    // ③ presenter 侧的观测量。注意这条通道**只在命令路径上发布**：它管不了"播完"
-    //    （那是事件的事），也管不了位置（那是进度的事）。
-    let mut status = player.subscribe_status();
-    spawn(async move {
-        while let Some(snapshot) = status.next().await {
-            volume.set(snapshot.volume);
-            muted.set(snapshot.muted);
-            error.set(snapshot.error);
-        }
-    });
-
-    // 打开 + 起播（命令进队列，立刻返回）
-    player.open(nsh_erika::MediaRequest::new(src.clone()));
-    player.play();
-    // `DANMAKU=off` 时不挂弹幕：量 CPU/GPU 时要一个"没有弹幕"的对照组。
-    if danmaku_uri != "off" && !danmaku_uri.is_empty() {
-        player.danmaku().add_track(danmaku_uri, "bilibili");
-    }
-
-    // 按钮的按下动作（每个按钮拿一份句柄 clone —— 它只是两个引用计数）
-    let p_toggle = player.clone();
+    // 控制条的每个动作都现取句柄：`None` = 还没挂载 / 已卸载，一律静默丢弃。
     let toggle = move || {
+        let Some(p) = slot.player() else { return };
         if playing.get() {
-            p_toggle.pause();
+            p.pause();
             playing.set(false);
         } else {
-            p_toggle.play();
+            p.play();
             playing.set(true);
         }
     };
-
-    let p_back = player.clone();
-    let back = move || {
-        let now = p_back.position();
-        p_back.seek(now.saturating_sub(Duration::from_secs(10)));
+    let seek_back = move || {
+        if let Some(p) = slot.player() {
+            let now = p.position();
+            p.seek(now.saturating_sub(Duration::from_secs(10)));
+        }
     };
-
-    let p_forward = player.clone();
-    let forward = move || {
-        let now = p_forward.position();
-        p_forward.seek(now + Duration::from_secs(10));
+    let seek_forward = move || {
+        if let Some(p) = slot.player() {
+            p.seek(p.position() + Duration::from_secs(10));
+        }
     };
-
-    let p_stop = player.clone();
     let stop = move || {
-        p_stop.stop();
-        playing.set(false);
+        if let Some(p) = slot.player() {
+            p.stop();
+            playing.set(false);
+        }
     };
-
     // 音量按 10% 一档：信号当"下一档"的基准，避免读引擎状态时的滞后。
-    let p_quieter = player.clone();
     let quieter = move || {
         let next = (volume.get() - 0.1).max(0.0);
-        p_quieter.set_volume(next);
+        if let Some(p) = slot.player() {
+            p.set_volume(next);
+        }
         volume.set(next);
     };
-
-    let p_louder = player.clone();
     let louder = move || {
         let next = (volume.get() + 0.1).min(1.0);
-        p_louder.set_volume(next);
+        if let Some(p) = slot.player() {
+            p.set_volume(next);
+        }
         volume.set(next);
     };
-
-    let p_mute = player.clone();
     let mute = move || {
         let next = !muted.get();
-        p_mute.set_muted(next);
+        if let Some(p) = slot.player() {
+            p.set_muted(next);
+        }
         muted.set(next);
     };
 
-    // 页面只放"显示"；控制条是普通的 NSH 元素，直接调句柄
-    root.child(nsh_erika::erika_video().player(&player).flex_1())
+    root.child(nsh_erika::erika_video().src(src.clone()).slot(slot).flex_1())
         .child(
             bar()
                 .child(tap(
                     move || if playing.get() { "暂停" } else { "播放" }.to_string(),
                     toggle,
                 ))
-                .child(tap(|| "-10s".to_string(), back))
-                .child(tap(|| "+10s".to_string(), forward))
+                .child(tap(|| "-10s".to_string(), seek_back))
+                .child(tap(|| "+10s".to_string(), seek_forward))
                 .child(tap(|| "音量 -".to_string(), quieter))
                 .child(tap(|| "音量 +".to_string(), louder))
                 .child(tap(

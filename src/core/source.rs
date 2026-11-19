@@ -295,19 +295,6 @@ impl Drop for PlayerInner {
         unregister(self.id);
     }
 }
-/// 一个播放会话：**一个引擎 + 一条画面通道 + 一个身份 + 一份寿命**。
-///
-/// 两个门共用它：
-///
-/// - app 的 [`ErikaPlayer`](crate::ErikaPlayer)：直读 `erika::Player`、发控制命令、**持座位**；
-/// - 平台控件（Linux `ErikaView` / `FrameBinder`、Windows 的 `draw`）：每帧
-///   [`request_frame`](Self::request_frame) + [`frame_snapshot`](Self::frame_snapshot)，
-///   靠 [`is_alive`](Self::is_alive) 决定还要不要出帧。
-///
-/// `Clone` 只是三次引用计数加一，可以随便被闭包捕获；`PartialEq` 比号（号单调递增、
-/// 永不复用，所以精确）。
-///
-/// 会话自己**不干活**：不渲染、不解码、不播放。它只是把上面四样东西绑在一起并给一个号。
 /// 一个会话的**视图侧**：帧邮箱 + 出帧请求 + 一个指向会话的弱引用。
 ///
 /// 平台控件（Linux `FrameBinder` / Windows `draw`）只认它：每帧
@@ -441,13 +428,4 @@ pub(crate) fn unregister(id: u64) {
             map.remove(&id);
         }
     }
-}
-
-/// 按号把会话升起来（`Weak` → `Arc`）。已经卸载 / 从没存在过时返回 `None`。
-///
-/// 这是 [`ErikaPlayer::resolve`](crate::ErikaPlayer::resolve) 的实现：外部只拿到号时，
-/// 靠它换回一个能发命令、能直读的句柄。
-pub(crate) fn owner_of(id: u64) -> Option<Arc<PlayerInner>> {
-    let map = REGISTRY.get()?.lock().ok()?;
-    map.get(&id)?.owner.upgrade()
 }

@@ -19,11 +19,11 @@
 //!     nsh_erika::register(components);
 //! }
 //!
-//! // 页面：句柄和帧源都在外面创建
-//! let player = ErikaPlayer::new()?;
-//! player.open(MediaRequest::new(uri));
-//! player.play();
-//! view().child(nsh_erika::erika_video().player(&player));   // 控件只负责显示
+//! // 页面：只建一个"邮箱"，引擎由组件创建
+//! let slot = ErikaSlot::new();
+//! view().child(nsh_erika::erika_video().src(uri).slot(slot));
+//! // 控制条：每次现取句柄（None = 还没挂载 / 已卸载）
+//! button().on_press(move || { if let Some(player) = slot.player() { player.pause() } });
 //! ```
 //!
 //! ## 读直连,写走队列
@@ -75,27 +75,31 @@
 //! 换哪个、怎么提示用户，都由调用者决定（它不知道宿主还有没有别的播放器可用）。
 //! `ErikaPlayer::new()` 本身就失败时是同步 `Err`，那时压根别建控件。
 //!
-//! ## 用法：句柄在外面，控件只显示
+//! ## 用法：组件建引擎，页面拿句柄
 //!
 //! ```no_run
 //! # use nsh_core::prelude::*;
 //! # fn page() -> impl IntoElement {
-//! // 1) 句柄在外面创建
-//! let player = nsh_erika::ErikaPlayer::new().expect("引擎起不来");
-//! player.open(nsh_erika::MediaRequest::new("/path/to/video.mkv"));
-//! player.play();
+//! // 1) 页面只建邮箱（不是引擎）
+//! let slot = nsh_erika::ErikaSlot::new();
 //!
-//! // 2) 页面里只放"显示"；控制条用应用自己的 NSH 元素画，直接调句柄
+//! // 2) 画面 + 自己的控制条；控制条每次现取句柄
 //! view()
 //!     .flex_col()
 //!     .flex_1()
-//!     .child(nsh_erika::erika_video().player(&player).flex_1())
-//!     .child(text("控制条写在这：button().on_press(move || player.pause())"))
+//!     .child(
+//!         nsh_erika::erika_video()
+//!             .src("/path/to/video.mkv")
+//!             .slot(slot)          // 组件在这里建引擎，并把句柄投递进邮箱
+//!             .flex_1(),
+//!     )
+//!     .child(text("控制条写这：按下去时 slot.player()?.pause() / seek(..)"))
 //! # }
 //! ```
 //!
-//! 控件**不自建引擎**、也没有任何控制 prop：它的 prop 表只有 `source`（帧源的号）。
-//! 为什么是号而不是句柄 —— NSH 的组件边界只能过 JSON，见 [`ErikaVideo`] 的说明。
+//! **引擎由控件（组件）创建、也由它销毁**：外部只建一个邮箱（[`ErikaSlot`]）拿句柄控制，
+//! 平台层只拿到一个号（`source`，组件自己从邮箱里读出来写上去）—— 因为 NSH 的组件边界
+//! 只能过 JSON，句柄过不去。
 //!
 //! ## 平台
 //!
@@ -224,11 +228,12 @@ pub use ::erika::MediaRequest;
 /// 播放状态机的 8 个态。上游类型，根上留一份高频的（`match` 事件时天天写）。
 pub use ::erika::PlayerState;
 pub use core::player::ErikaPlayer;
+pub use core::slot::ErikaSlot;
 
 /// 原生控件名。
 ///
-/// 一般不用直接写：用 [`ErikaVideo`]（`nsh_erika::erika_video().player(&player)`）就会带上 `source` prop。
-/// 手写时是 `native(nsh_erika::COMPONENT_NAME).prop("source", source.id())`。
+/// 一般不用直接写：用 [`ErikaVideo`]（`nsh_erika::erika_video().src(uri)`）就够了 ——
+/// `source` 号由组件从邮箱里读出来自己写上去。
 pub const COMPONENT_NAME: &str = "erika.video";
 
 /// 把 `erika.video` 注册进 `components`。
@@ -239,18 +244,32 @@ pub fn register(component: &PlatformComponents) {
     component.register(COMPONENT_NAME, backend::native_view::factory());
 }
 
+impl From<ErikaSlot> for Prop<Option<ErikaSlot>> {
+    /// 让 `.slot(slot)` 能直接传值（属性上是 `Option`，因为有"不给邮箱"这条路）。
+    fn from(slot: ErikaSlot) -> Self {
+        Prop::new(Some(slot))
+    }
+}
+
 /// 画面的 props。
 ///
-/// **控制类**（`paused` / `muted` / `volume` / `rate`）在组件体里被翻译成引擎命令，
-/// **不过 JSON**；只有 `source`（帧源号）和将来的 `object_fit`（贴合方式）需要过桥。
+/// **引擎由组件创建**（一次性、同步），失败就渲染错误界面。
+///
+/// | prop | 方向 | 说明 |
+/// |---|---|---|
+/// | `src` | 进 | 片源；变了就重新 `open` |
+/// | `slot` | 进/出 | 邮箱：组件把「号 + 句柄」投递进去，外部据此控制（不给就是纯声明式） |
+/// | `paused` / `muted` / `volume` / `rate` | 进 | **声明式意图**，是这几个状态的唯一真相源 |
+///
+/// `source`（帧源号）不是 prop：组件从邮箱里读出来，写给平台层。
 #[derive(Debug, Clone, PartialEq, Props)]
 pub struct ErikaVideoProps {
-    /// 帧源号：`erika_video().player(&player)` 填；0 = 没有外部引擎。
-    #[prop(default)]
-    pub source: Prop<u64>,
-    /// 视频地址：没有外部引擎时由组件自己建引擎并打开它。
+    /// 片源地址。空串 = 没有媒体（引擎照样建，只是没东西可放）。
     #[prop(default)]
     pub src: Prop<String>,
+    /// 邮箱：组件创建引擎后把句柄投递到这里。不给 = 纯声明式（只能靠 props 控制）。
+    #[prop(default)]
+    pub slot: Prop<Option<ErikaSlot>>,
     /// 暂停中。
     #[prop(default)]
     pub paused: Prop<bool>,
@@ -265,154 +284,93 @@ pub struct ErikaVideoProps {
     pub rate: Prop<f64>,
 }
 
-/// 控制类 prop 的快照：`Copy`，所以能进 `spawn` 的 `'static` future。
-#[derive(Clone, Copy)]
-struct Intents {
-    paused: Prop<bool>,
-    muted: Prop<bool>,
-    volume: Prop<f32>,
-    rate: Prop<f64>,
-}
-
-impl Intents {
-    fn of(p: &ErikaVideoProps) -> Self {
-        Self {
-            paused: p.paused,
-            muted: p.muted,
-            volume: p.volume,
-            rate: p.rate,
-        }
-    }
-
-    /// 把当前意图全部下发一遍。
-    ///
-    /// 引擎是**异步**建的：`paused` 这类 prop 的 effect 很可能在 `control` 还是 `None`
-    /// 时先跑一遍，什么都不发。所以拿到引擎之后必须补一次 —— 这不是保险，是必需的。
-    fn apply(self, control: Stored<Option<ErikaPlayer>>) {
-        let Some(source) = control.get() else { return };
-        if untracked(|| self.paused.get()) {
-            source.pause();
-        } else {
-            source.play();
-        }
-        source.set_muted(untracked(|| self.muted.get()));
-        source.set_volume(untracked(|| self.volume.get()));
-        source.set_rate(untracked(|| self.rate.get()));
-    }
-}
-
-/// 一个播放器的画面。
+/// 一块播放器的画面。**引擎由它创建、也由它销毁**。
 ///
-/// **唯一的画面入口**：`erika_video().player(&player)`（外部引擎）或
-/// `erika_video().src(uri)`（组件自己建引擎）。
+/// ```ignore
+/// let slot = ErikaSlot::new();                        // 页面建邮箱
+/// view().child(erika_video().src(uri).slot(slot))     // 组件建引擎 → 投递
+///       .child(button().on_press(move || {
+///           if let Some(player) = slot.player() { player.pause() }
+///       }))
+/// ```
 ///
-/// 传 `&player` 或 `player.clone()` 都行（`Borrow`）。
+/// 不给 `slot` 就是纯声明式（`src` + `paused` / `muted` / `volume` / `rate`）；
+/// 给了邮箱，控制条就走句柄（`seek` / `stop` / 弹幕 / 轨道 / 订阅）。
+///
+/// 卸载即销毁：组件没了，引擎就没（守卫那一份只在组件手里）。
 #[component]
 pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
-    let external = props.source.get();
-    let source_id = signal(external);
-    // 保活：内部引擎的寿命 = 这个组件（外部模式下永远是 None）。
-    let owned = stored(Option::<ErikaPlayer>::None);
-    // 控制面：内部建的和外部传的在这里汇流成同一种东西，控制 effect 只认它。
-    let control = stored(Option::<ErikaPlayer>::None);
-
-    let intents = Intents::of(&props);
-
-    // 内部建引擎
-    if external == 0 {
-        let src = props.src.get();
-        spawn(async move {
-            if untracked(|| props.source.get()) != 0 {
-                return;
+    let slot = props.slot.get_untracked();
+    let player = match ErikaPlayer::new() {
+        Ok(player) => player,
+        Err(error) => {
+            log::error!("erika.video: 引擎起不来: {error}");
+            if let Some(slot) = slot {
+                slot.fail(error.clone());
             }
-            match blocking(ErikaPlayer::new).await {
-                Ok(Ok(player)) => {
-                    if !src.is_empty() {
-                        player.open(MediaRequest::new(src));
-                    } // 注意：不 play —— 播放与否交给 `intents.apply`
-                    let id = player.session_id();
-                    // 内部自建的：控制面和保活是**同一个句柄**，不用再 resolve
-                    control.with(|c| *c = Some(player.clone()));
-                    owned.with(|o| *o = Some(player));
-                    source_id.set(id);
-                    intents.apply(control); // 补上早到的意图
-                }
-                Ok(Err(e)) => log::error!("erika.video: 引擎起不来: {e}"),
-                Err(_) => log::error!("erika.video: 建引擎的线程挂了"),
-            }
-        });
+            return view().child(text(error)).into_element();
+        }
+    };
+    if let Some(slot) = slot {
+        slot.fill(&player);
     }
+    let _keep = stored(Some(player.clone())); // 保活（C2 换成 stored(session)）
 
-    // 外部号：挂载时跑一次（effect 立即执行），之后号变了也跑
-    effect(move || {
-        let id = props.source.get();
-        if id == 0 {
-            return;
-        }
-        // 外部号：解不成句柄（还没建好 / 已经卸载）就当作不可用 —— 后面的意图会静默丢弃
-        control.with(|c| *c = ErikaPlayer::resolve(id));
-        if let Some(player) = owned.try_with(|o| o.take()).flatten() {
-            // 外部号来了：内部引擎让位（后台线程收，别在 UI 线程等 shutdown）
-            std::thread::spawn(move || player.shutdown());
-        }
-        intents.apply(control);
-    });
-
-    // 控制：只认 control；引擎还没就绪时什么都不发（就绪后由 `Intents::apply` 补）
-    effect(move || {
-        let paused = props.paused.get();
-        if let Some(source) = control.get() {
-            if paused {
-                source.pause();
-            } else {
-                source.play();
+    // 片源：body 里开一次，之后 `src` 变了再开（同一个值不会重复打开）。
+    // 变回空串只是"不再换片"，不会关掉已经开着的媒体。
+    let opened = props.src.get();
+    if !opened.is_empty() {
+        player.open(MediaRequest::new(opened.clone()));
+    }
+    effect({
+        let p = player.clone();
+        move || {
+            let uri = props.src.get();
+            if uri != opened && !uri.is_empty() {
+                p.open(MediaRequest::new(uri));
             }
         }
     });
-    effect(move || {
-        let muted = props.muted.get();
-        if let Some(source) = control.get() {
-            source.set_muted(muted);
+
+    effect({
+        let p = player.clone();
+        move || {
+            if props.paused.get() {
+                p.pause()
+            } else {
+                p.play()
+            }
         }
     });
-    effect(move || {
-        let volume = props.volume.get();
-        if let Some(source) = control.get() {
-            source.set_volume(volume);
-        }
+    effect({
+        let p = player.clone();
+        move || p.set_muted(props.muted.get())
     });
-    effect(move || {
-        let rate = props.rate.get();
-        if let Some(source) = control.get() {
-            source.set_rate(rate);
-        }
+    effect({
+        let p = player.clone();
+        move || p.set_volume(props.volume.get())
+    });
+    effect({
+        let p = player.clone();
+        move || p.set_rate(props.rate.get())
     });
 
     cleanup(move || {
-        if let Some(player) = owned.try_with(|o| o.take()).flatten() {
-            std::thread::spawn(move || {
-                player.shutdown();
-            });
+        if let Some(slot) = slot {
+            slot.clear()
         }
     });
 
-    native(COMPONENT_NAME).prop("source", move || {
-        let external = props.source.get();
-        let id = if external != 0 {
-            external
-        } else {
-            source_id.get()
-        };
-        if id == 0 {
-            JsonValue::Null
-        } else {
-            JsonValue::from(id)
-        }
-    })
+    // 号在这个组件的整个生命里是**常量**（一个组件 = 一个引擎），所以直接写常量，
+    // 不去读邮箱的信号：邮箱可能比组件先被 dispose，那时读信号会 panic。
+    // 「画面解绑」由元素销毁 + `Session::drop` 的 `unregister` 负责（C2 起守卫负责关机）。
+    native(COMPONENT_NAME)
+        .prop("source", JsonValue::from(player.session_id()))
+        .into_element()
 }
 impl ErikaVideoElement {
-    /// 画面绑定的播放器。
-    pub fn player(self, player: impl std::borrow::Borrow<ErikaPlayer>) -> Self {
-        self.source(player.borrow().session_id()) // 同 crate，拿得到 pub(crate)
+    /// 邮箱（和 `.slot(...)` 同义，写成方法只是为了让链式读起来像句子）。
+    pub fn mailbox(self, slot: ErikaSlot) -> Self {
+        self.slot(slot)
     }
 }
