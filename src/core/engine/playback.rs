@@ -20,8 +20,8 @@ impl ErikaEngine {
         match cmd {
             PlaybackCmd::Open(req) => self.open(req, ctx),
             PlaybackCmd::Stop => self.stop(ctx),
-            PlaybackCmd::Play => self.control(ctx, "play", PresenterRuntime::play),
-            PlaybackCmd::Pause => self.control(ctx, "pause", PresenterRuntime::pause),
+            PlaybackCmd::Play => self.play_or_pause(ctx, true),
+            PlaybackCmd::Pause => self.play_or_pause(ctx, false),
             PlaybackCmd::Seek(pos) => self.control(ctx, "seek", move |p| p.seek(pos)),
         }
     }
@@ -68,7 +68,15 @@ impl ErikaEngine {
         }
         self.publish(ctx);
     }
-
+    fn play_or_pause(&mut self, ctx: &ActorContext<Self>, playing: bool) {
+        // 和 `stop()` 同一条口径：没媒体时什么都不做、不报错。
+        if !self.presenter.player().has_open_media() {
+            return;
+        }
+        self.control(ctx, if playing { "play" } else { "pause" }, move |p| {
+            if playing { p.play() } else { p.pause() }
+        });
+    }
     /// 停播。状态由 erika 自己维护:停完是 `PlayerState::Stopped`,而**媒体仍然开着**
     /// (`has_open_media()` 为 true、`duration` 还在、位置归 0)。
     fn stop(&mut self, ctx: &ActorContext<Self>) {

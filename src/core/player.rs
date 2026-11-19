@@ -453,10 +453,9 @@ impl ErikaPlayer {
     /// **内部存的是 f32**(`set_volume` 落地时 `normalize_volume(volume as f32)`),
     /// 所以真实精度就是 f32 —— 这里跟着真实精度走,上行时 `as f64` 无损。
     pub fn set_volume(&self, volume: f32) {
-        if !volume.is_finite() {
-            return;
+        if let Some(volume) = normalize_volume(volume) {
+            self.send_settings(SettingsCmd::Volume(volume as f64));
         }
-        self.send_settings(SettingsCmd::Volume(volume.clamp(0.0, 1.0) as f64));
     }
 
     /// 当前音量(0.0..=1.0,**f32**)。读的是引擎发布的状态:`watch`,非阻塞,最多滞后一条命令。
@@ -484,10 +483,9 @@ impl ErikaPlayer {
     /// 变速是 **presenter 让音频环做 time-stretch**(变速不变调):直连 `Player` 的话
     /// 画面会变快而声音不变。
     pub fn set_rate(&self, rate: f64) {
-        if !(rate.is_finite() && rate > 0.0) {
-            return;
+        if let Some(rate) = normalize_rate(rate) {
+            self.send_settings(SettingsCmd::Rate(rate));
         }
-        self.send_settings(SettingsCmd::Rate(rate));
     }
 
     /// 当前**生效**的倍速 —— 直读 `PlaybackSnapshot::clock`(播放中 2ms 更新、暂停 50ms)。
@@ -701,4 +699,11 @@ impl ErikaPlayer {
     pub fn last_error(&self) -> Option<String> {
         self.status().error
     }
+}
+
+pub(crate) fn normalize_volume(volume: f32) -> Option<f32> {
+    volume.is_finite().then(|| volume.clamp(0.0, 1.0))
+}
+pub(crate) fn normalize_rate(rate: f64) -> Option<f64> {
+    (rate.is_finite() && rate > 0.0).then_some(rate)
 }
