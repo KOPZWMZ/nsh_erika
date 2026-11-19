@@ -54,7 +54,7 @@ use nsh_platform_windows::{
 };
 
 use crate::core::source::export_size;
-use crate::core::source::{ErikaSession, FrameImage, FrameRequest};
+use crate::core::source::{FrameImage, FrameRequest, ViewSource};
 
 /// `request_frame` 的最小间隔 = 引擎的**画面节奏**（[`FRAME_EVERY`]），不是随手写的数。
 ///
@@ -77,7 +77,7 @@ pub(crate) fn factory() -> ComponentFactory {
 ///
 /// 只认一个 prop：`source`（要显示的帧源号）。控件不自建引擎、也不控制播放。
 pub struct ErikaView {
-    source: Option<ErikaSession>,
+    source: Option<ViewSource>,
     /// 从任意线程请求重绘用；每出一帧要一次。
     cx: ComponentContext,
     /// 当前贴着的纹理。设备/画面代号变了就整块重做（`draw` 拿的是 `&self`，所以要 RefCell）。
@@ -240,7 +240,7 @@ impl NativeComponent for ErikaView {
         *self.cache.borrow_mut() = None;
         self.first_frame.set(false);
         self.open_failed.set(false);
-        match ErikaSession::resolve(id) {
+        match ViewSource::resolve(id) {
             Some(source) => {
                 // 有新帧就让引擎叫我们一声：`ComponentContext` 是 `Send + Sync` 的，
                 // 引擎线程可以直接 `redraw()`（Windows 没有 frame clock，这是唯一不空转的驱动方式）。

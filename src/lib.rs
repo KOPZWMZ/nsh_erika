@@ -46,7 +46,7 @@
 //! │ cmd.rs      命令词汇表:ErikaCmd 五族                                  │
 //! │ player.rs   ErikaPlayer + ErikaStatus                                │
 //! │ listener.rs 三条订阅通道的出口:ErikaStatusListener / …Listener + ErikaEvent │
-//! │ source.rs   ErikaSession  + FrameSlot + FrameImage（帧载荷）       │
+//! │ source.rs   ViewSource  + FrameSlot + FrameImage（帧载荷）       │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ┌ 平台适配层 —— 唯一允许出现 gtk / D2D 的地方 ─────────────────────────┐
 //! │ linux/native_view.rs   ErikaView：`gtk::Picture` + tick 回调          │
@@ -206,7 +206,7 @@ pub mod events {
 /// 帧源与帧载荷：**自写控件 / 出帧自检**才用，普通应用用 [`ErikaVideo`](crate::ErikaVideo)。
 #[cfg(feature = "escape-hatch")]
 pub mod video {
-    pub use crate::core::source::{ErikaSession, FrameImage, FrameRequest};
+    pub use crate::core::source::{FrameImage, FrameRequest, ViewSource};
     #[cfg(target_os = "windows")]
     pub use crate::windows::frame::SharedTexture;
     #[cfg(target_os = "linux")]
@@ -224,8 +224,6 @@ pub use ::erika::MediaRequest;
 /// 播放状态机的 8 个态。上游类型，根上留一份高频的（`match` 事件时天天写）。
 pub use ::erika::PlayerState;
 pub use core::player::ErikaPlayer;
-
-use crate::core::source::ErikaSession;
 
 /// 原生控件名。
 ///
@@ -290,7 +288,7 @@ impl Intents {
     ///
     /// 引擎是**异步**建的：`paused` 这类 prop 的 effect 很可能在 `control` 还是 `None`
     /// 时先跑一遍，什么都不发。所以拿到引擎之后必须补一次 —— 这不是保险，是必需的。
-    fn apply(self, control: Stored<Option<ErikaSession>>) {
+    fn apply(self, control: Stored<Option<ErikaPlayer>>) {
         let Some(source) = control.get() else { return };
         if untracked(|| self.paused.get()) {
             source.pause();
@@ -316,7 +314,7 @@ pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
     // 保活：内部引擎的寿命 = 这个组件（外部模式下永远是 None）。
     let owned = stored(Option::<ErikaPlayer>::None);
     // 控制面：内部建的和外部传的在这里汇流成同一种东西，控制 effect 只认它。
-    let control = stored(Option::<ErikaSession>::None);
+    let control = stored(Option::<ErikaPlayer>::None);
 
     let intents = Intents::of(&props);
 
@@ -333,7 +331,8 @@ pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
                         player.open(MediaRequest::new(src));
                     } // 注意：不 play —— 播放与否交给 `intents.apply`
                     let id = player.session_id();
-                    control.with(|c| *c = ErikaSession::resolve(id)); // 内部也走同一条门
+                    // 内部自建的：控制面和保活是**同一个句柄**，不用再 resolve
+                    control.with(|c| *c = Some(player.clone()));
                     owned.with(|o| *o = Some(player));
                     source_id.set(id);
                     intents.apply(control); // 补上早到的意图
@@ -350,7 +349,8 @@ pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
         if id == 0 {
             return;
         }
-        control.with(|c| *c = ErikaSession::resolve(id));
+        // 外部号：解不成句柄（还没建好 / 已经卸载）就当作不可用 —— 后面的意图会静默丢弃
+        control.with(|c| *c = ErikaPlayer::resolve(id));
         if let Some(player) = owned.try_with(|o| o.take()).flatten() {
             // 外部号来了：内部引擎让位（后台线程收，别在 UI 线程等 shutdown）
             std::thread::spawn(move || player.shutdown());

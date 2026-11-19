@@ -44,7 +44,7 @@
 //!
 //! 所以这条线程不是"播放需要线程"(解码 erika 自己在 `erika-playback` 线程里做),
 //! 而是**"把阻塞调用关进笼子"**需要。UI 线程上只剩三件便宜事:
-//! 发命令(`send_cmd`)、读状态(`get_state`)、取帧(`ErikaSession::frame_snapshot`)。
+//! 发命令(`send_cmd`)、读状态(`get_state`)、取帧(`ViewSource::frame_snapshot`)。
 //!
 //! # 形状:media_kit
 //!
@@ -61,7 +61,7 @@
 //!
 //! # 出帧:按需,不自驱
 //!
-//! 渲染层每帧调 [`ErikaSession::request_frame`](crate::ErikaSession::request_frame)。
+//! 渲染层每帧调 [`ViewSource::request_frame`](crate::video::ViewSource::request_frame)。
 //! **没有请求就不出帧** —— 不导出、不 capture、不建纹理,窗口被限频时不会空转烧 GPU,
 //! 也不会和 UI 抢同一个队列到抖动。
 //!
@@ -76,7 +76,9 @@
 use crate::core::cmd::{ErikaCmd, PlaybackCmd, SettingsCmd, SubtitleCmd};
 use crate::core::engine::ErikaEngine;
 
-use crate::core::source::{ErikaSession, Seat};
+use crate::core::source::PlayerInner;
+#[cfg(feature = "escape-hatch")]
+use crate::core::source::ViewSource;
 use crate::core::source::{FrameSlot, Request};
 use crate::events::{ErikaEventsListener, ErikaProgressListener, ErikaStatusListener};
 
@@ -233,46 +235,32 @@ pub struct ErikaProgress {
     /// 总时长（`None` = 还没 probe 完 / 没有媒体）。
     pub duration: Option<Duration>,
 }
-/// 播放器句柄:**只管控制与状态**,碰不到帧(帧走会话 `ErikaSession`,逃式舱加 feature 才有)。
+/// 播放器句柄:**一个会话的全部** —— 控制、直读、画面通道、身份。
 ///
-/// `Clone` 成本极低(两次引用计数 +1),可以随便传,也可以跨线程用。
-/// 身份比较看 `engine` 的 `Arc`(同一个播放器 = 同一个 `Arc`),所以能直接拿来比 props
-/// 变没变。
+/// 内部是 `Arc<PlayerInner>`,`Clone` 只是引用计数 +1,可以随便传、可以跨线程用;
+/// `PartialEq` 比较 `Arc` 指针,所以能放进 `signal()` 直接比 props 变没变。
+/// 平台控件拿到的只是它的视图侧([`ViewSource`](crate::video::ViewSource)),不是它本身。
 ///
 /// 放下最后一个句柄时命令通道关闭 → 引擎的 `recv_cmd_timeout` 返回 `Closed` →
 /// `run` 退出(presenter 随之 Drop,音频设备、解码线程一起回收)。没有 `dispose`:
 /// 想收掉引擎,就把所有句柄都 drop 掉。
+// 外层只包一层 Arc：`Clone` 是引用计数、`PartialEq` 是指针相等，Drop 落在 PlayerInner 上
 pub struct ErikaPlayer {
-    player: erika::Player,
-    /// 这个播放器的会话（引擎 + 画面通道 + 身份），和控件共享。
-    session: ErikaSession,
-    /// 一张"座位"：`Clone` 多一张票、`Drop` 还一张。
-    ///
-    /// **最后一张座位掉下来时会话会注销**（见 [`Seat`](crate::core::source::Seat)）——
-    /// 所以本类型**不需要 `Drop`**：生命周期全部由座位管。
-    ///
-    /// 声明在最后：字段按声明顺序析构，`session` 先走、`seat` 后走，于是"摘表 → 引擎关"
-    /// 落在同一步、同一个线程里，不会出现半死状态被别人拿到。
-    seat: Arc<Seat>,
+    inner: Arc<PlayerInner>,
 }
-
 impl Clone for ErikaPlayer {
     fn clone(&self) -> Self {
         Self {
-            player: self.player.clone(),
-            session: self.session.clone(),
-            seat: self.seat.clone(),
+            inner: self.inner.clone(),
         }
     }
 }
-
 impl PartialEq for ErikaPlayer {
-    fn eq(&self, other: &Self) -> bool {
-        self.session == other.session // 号相等 = 同一个引擎
+    fn eq(&self, o: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &o.inner)
     }
 }
 impl Eq for ErikaPlayer {}
-
 impl ErikaPlayer {
     /// 建一个播放器:**立刻返回**。画面用 [`ErikaVideo`](crate::ErikaVideo)（`erika_video().player(&player)`）。
     ///
@@ -303,27 +291,39 @@ impl ErikaPlayer {
             .recv_timeout(Duration::from_secs(5))
             .map_err(|error| format!("引擎线程没能交出 Player: {error}"))?;
         let engine = Arc::new(EngineGuard { handle });
-        let (session, seat) = ErikaSession::new(engine, frames, request);
-        Ok(Self {
+        let id = crate::core::source::NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let inner = Arc::new(PlayerInner {
+            id,
             player,
-            session,
-            seat,
-        })
+            engine,
+            frames,
+            request,
+        });
+        crate::core::source::register(&inner);
+        Ok(Self { inner })
     }
-    /// 这个播放器的会话（画面 / 帧源）。**需要 `escape-hatch` feature。**
+    /// 这个会话的**视图侧**（帧邮箱 + 出帧请求）。**需要 `escape-hatch` feature。**
     ///
     /// 一般不用它：画面直接写 [`ErikaVideo`](crate::ErikaVideo)
     /// （`erika_video().player(&player)`）就行。要"同一个播放器在几处同时显示"（镜像）
     /// 或者自己管 tick 时才需要。
     #[cfg(feature = "escape-hatch")]
-    pub fn session(&self) -> ErikaSession {
-        self.session.clone()
+    pub fn session(&self) -> ViewSource {
+        ViewSource::from_inner(&self.inner)
     }
 
-    /// 会话的号（画面绑定的目标）。一般不用直接调：用
-    /// [`ErikaVideo`](crate::ErikaVideo) 拿画面。
+    /// 会话的号。控件绑定显示目标用（`native(COMPONENT_NAME).prop("source", id)`），
+    /// 也是外部"只拿到号"时用来 `resolve` 回句柄的键。
     pub(crate) fn session_id(&self) -> u64 {
-        self.session.id()
+        self.inner.id
+    }
+
+    /// 按号换回一个句柄：号有效（会话还活着）时 `Some`，卸载后 / 没这个号时 `None`。
+    ///
+    /// **`None` 是正常状态**，不是错误：它同时表示"还没建好"和"已经卸载"，
+    /// 调用方一律按"不可用"处理。
+    pub(crate) fn resolve(id: u64) -> Option<Self> {
+        crate::core::source::owner_of(id).map(|inner| Self { inner })
     }
 
     /// 立刻停掉引擎并**等它退完**(最多 `SHUTDOWN_TIMEOUT`)。
@@ -335,13 +335,15 @@ impl ErikaPlayer {
     /// 所以宿主想在退出前先收干净就调它;不调也行,最后一个句柄 drop 时自动走同一套等待
     /// (控件持有会话、会话持有引擎,所以引擎可能比播放句柄晚一步关)。
     pub fn shutdown(&self) {
-        shutdown_engine(&self.session.engine.handle);
+        // 先摘表：让"号 → 会话"立刻失效，别让新挂上来的控件拿到一个正在拆的引擎。
+        crate::core::source::unregister(self.inner.id);
+        shutdown_engine(&self.inner.engine.handle);
     }
     /// 弹幕句柄：发弹幕命令 + 读弹幕快照。
     ///
     /// 每次调用返回一个新的句柄值（内部只做一次 Arc 加一），可以直接被 UI 闭包捕获。
     pub fn danmaku(&self) -> ErikaDanmaku {
-        ErikaDanmaku::new(self.session.engine.clone())
+        ErikaDanmaku::new(self.inner.engine.clone())
     }
 
     /// 字幕句柄:样式(外观 / 版面)与延迟的读写。
@@ -356,7 +358,7 @@ impl ErikaPlayer {
     /// 引擎已退出时这里静默失败——UI 层面由 [`status`](Self::status) 的存活判定
     /// 报告 `Error`(见那里的注释),不需要每个调用点自己处理。
     fn send(&self, cmd: ErikaCmd) {
-        let _ = self.session.engine.handle.send_cmd(cmd);
+        let _ = self.inner.engine.handle.send_cmd(cmd);
     }
 
     // ── 三个薄 helper:抵消 `ErikaCmd::Playback(PlaybackCmd::Play)` 这种嵌套噪音,
@@ -468,7 +470,7 @@ impl ErikaPlayer {
     /// 它和 [`ErikaStatus::volume`] 是同一个值。比较请用容差(示例里用 `±0.01`)——
     /// f32 在 0.3 附近的间隔约 `3e-8`,别写 `abs() < 1e-9` 那种永远不成立的判据。
     pub fn volume(&self) -> f32 {
-        self.session.engine.handle.get_state().volume
+        self.inner.engine.handle.get_state().volume
     }
 
     /// 静音开关。**不改变 [`volume`](Self::volume)**:上游 `set_muted` 只把输出压到 0,
@@ -479,7 +481,7 @@ impl ErikaPlayer {
 
     /// 当前是否静音(读引擎发布的状态,最多滞后一条命令)。
     pub fn is_muted(&self) -> bool {
-        self.session.engine.handle.get_state().muted
+        self.inner.engine.handle.get_state().muted
     }
 
     /// 倍速。非法值直接丢弃(上游会把非有限 / `<= 0` normalize 成 1.0,放过去只会
@@ -498,7 +500,7 @@ impl ErikaPlayer {
     /// 刚 `set_rate` 之后可能还是旧值:变速要经过"音频环 time-stretch + 时钟换斜率",
     /// worker 提交后才变。
     pub fn rate(&self) -> f64 {
-        self.player.playback_snapshot().clock.rate()
+        self.inner.player.playback_snapshot().clock.rate()
     }
 
     /// 订阅**事件流**:erika 的离散事件(状态 / 缓冲 / 轨道 / 选轨 / 错误)逐条转发过来。
@@ -514,7 +516,7 @@ impl ErikaPlayer {
     /// 落后太多(事件被丢)时会收到 [`ErikaEvent::Resync`](crate::events::ErikaEvent::Resync);
     /// 只有返回 `None` 才是引擎线程没了。
     pub fn subscribe_events(&self) -> ErikaEventsListener {
-        ErikaEventsListener::new(self.session.engine.handle.get_events_rx())
+        ErikaEventsListener::new(self.inner.engine.handle.get_events_rx())
     }
 
     /// 订阅**状态**(低频):**只在命令路径上**发布(每条命令处理完 / 出错 / open 中途)。
@@ -531,7 +533,7 @@ impl ErikaPlayer {
     ///
     /// 其余限制见 [`ErikaStatusListener`](crate::events::ErikaStatusListener)。
     pub fn subscribe_status(&self) -> ErikaStatusListener {
-        ErikaStatusListener::new(self.session.engine.handle.state_rx())
+        ErikaStatusListener::new(self.inner.engine.handle.state_rx())
     }
 
     /// 订阅**进度**(10Hz):位置 + 总时长,引擎已经算好。
@@ -549,7 +551,7 @@ impl ErikaPlayer {
     /// });
     /// ```
     pub fn subscribe_progress(&self) -> ErikaProgressListener {
-        ErikaProgressListener::new(self.session.engine.handle.progress_rx())
+        ErikaProgressListener::new(self.inner.engine.handle.progress_rx())
     }
     /// 在引擎线程上对 `PresenterRuntime` 执行一段操作 —— **presenter 独有 API 的逃生口**。
     ///
@@ -599,7 +601,7 @@ impl ErikaPlayer {
     /// 生命周期状态(erika 的 8 态:`Idle` / `Opening` / `Ready` / `Playing` /
     /// `Paused` / `Stopped` / `Closed` / `Error`)。
     pub fn state(&self) -> PlayerState {
-        self.player.state()
+        self.inner.player.state()
     }
 
     /// 当前位置(一个数):**直读** `Player`，一次锁、永远新鲜。
@@ -612,33 +614,33 @@ impl ErikaPlayer {
     /// 就是为这个存在的)。所以**进度条 / 时间文字用 `progress()`**(同一次采样、10Hz),
     /// 帧级精确(波形游标、逐帧步进、A/B 点)才用这个。
     pub fn position(&self) -> Duration {
-        self.player.current_media_time()
+        self.inner.player.current_media_time()
     }
 
     /// 当前进度(引擎算好的快照,10Hz 刷新)。订阅版见
     /// [`subscribe_progress`](Self::subscribe_progress)。
     pub fn progress(&self) -> ErikaProgress {
-        self.session.engine.handle.get_progress()
+        self.inner.engine.handle.get_progress()
     }
     /// 总时长。**`stop()` 之后不会变 `None`**(媒体还开着)——
     /// 判断"有没有视频"请用 [`state`](Self::state) 或 [`has_media`](Self::has_media)。
     pub fn duration(&self) -> Option<Duration> {
-        self.player.duration()
+        self.inner.player.duration()
     }
 
     /// 有没有媒体(打开中 / 暂停 / 停播都算有)。
     pub fn has_media(&self) -> bool {
-        self.player.has_open_media()
+        self.inner.player.has_open_media()
     }
 
     /// 在不在播。
     pub fn is_playing(&self) -> bool {
-        self.player.playback_snapshot().is_playing()
+        self.inner.player.playback_snapshot().is_playing()
     }
 
     /// 流代次:`open`/`seek`/`stop` 都 +1。用来作废在途帧,**不是**会话代次。
     pub fn generation(&self) -> u64 {
-        self.player.playback_generation()
+        self.inner.player.playback_generation()
     }
 
     /// 轨道句柄:媒体轨道(音轨 / 字幕轨)的读与选择 + 外部字幕的挂 / 摘。
@@ -652,21 +654,21 @@ impl ErikaPlayer {
 
     /// 轨道列表(直连 `Player`,零延迟)。给 [`ErikaTracks::list`] 用。
     pub(crate) fn media_tracks(&self) -> Vec<TrackInfo> {
-        self.player.tracks()
+        self.inner.player.tracks()
     }
 
     /// 当前轨道选择(直连,零延迟)。给 [`ErikaTracks::selection`] 用。
     pub(crate) fn media_track_selection(&self) -> TrackSelection {
-        self.player.track_selection()
+        self.inner.player.track_selection()
     }
 
     /// 章节列表(打开时读出来的;没有就是空)。UI 做章节跳转用。
     pub fn chapters(&self) -> Vec<ChapterInfo> {
-        self.player.chapters()
+        self.inner.player.chapters()
     }
     /// 内部用：拿裸 `Player`（`raw()` 的 crate 内版本，不受 feature 影响）。
     pub(crate) fn player_inner(&self) -> &erika::Player {
-        &self.player
+        &self.inner.player
     }
 
     /// **裸访问逃生口**(opt-in)。
@@ -674,7 +676,7 @@ impl ErikaPlayer {
     /// ⚠️ 从这里拿到的**写方法全部绕过 presenter 的音频协调**,会音画不同步
     /// (实测:倍速 2x 声音不变快、seek(0) 声音不回去)。只用来读我们还没封装的东西。
     pub fn raw(&self) -> &erika::Player {
-        &self.player
+        &self.inner.player
     }
     /// 读 presenter 侧的状态(音量 / 静音 / 弹幕 / 字幕 / 错误)。
     ///
@@ -691,8 +693,8 @@ impl ErikaPlayer {
     /// 引擎线程已经退出时,这里会补一条 `error`(`"engine thread is gone"`),
     /// 免得 UI 以为一切正常。
     pub fn status(&self) -> ErikaStatus {
-        let mut st = self.session.engine.handle.get_state();
-        if !self.session.engine.handle.is_alive() {
+        let mut st = self.inner.engine.handle.get_state();
+        if !self.inner.engine.handle.is_alive() {
             if st.error.is_none() {
                 st.error = Some("engine thread is gone".into());
             }

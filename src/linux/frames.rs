@@ -13,7 +13,7 @@ use std::time::Instant;
 use gtk::prelude::*;
 use nsh_platform_linux::gtk4 as gtk;
 
-use crate::core::source::{ErikaSession, FrameImage, FrameRequest, export_size};
+use crate::core::source::{FrameImage, FrameRequest, ViewSource, export_size};
 
 /// `DRM_FORMAT_ABGR8888`（内存里是 R,G,B,A，对应 erika 的 R8G8B8A8_UNORM）。
 const FOURCC_ABGR8888: u32 = 0x3432_4241;
@@ -22,7 +22,7 @@ const FOURCC_ABGR8888: u32 = 0x3432_4241;
 pub(crate) struct FrameBinder {
     picture: gtk::Picture,
     /// 正在显示的帧源（`bind` 成功时才有）。
-    source: Option<ErikaSession>,
+    source: Option<ViewSource>,
     /// 当前 tick 回调还该不该活着：换绑 / 解绑时先置 `false`，旧回调自己 `Break`。
     ticking: Rc<Cell<bool>>,
 }
@@ -40,7 +40,7 @@ impl FrameBinder {
     ///
     /// 换绑时旧回调靠 [`Self::ticking`] 自己 `Break`（`add_tick_callback` 没有撤销接口），
     /// 所以每次绑定都新建一套状态。
-    pub(crate) fn bind(&mut self, source: ErikaSession) {
+    pub(crate) fn bind(&mut self, source: ViewSource) {
         // 同一个帧源重复投递（比如 prop 被重新求值）时什么都不做：重建回调会白丢一帧状态。
         if self.ticking.get() && self.source.as_ref() == Some(&source) {
             return;

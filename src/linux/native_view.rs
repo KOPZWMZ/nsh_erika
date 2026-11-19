@@ -10,7 +10,7 @@
 //! ## 控件只有"画"
 //!
 //! 引擎归组件层（[`ErikaVideo`](crate::ErikaVideo)）：外部给了句柄就用外部那个，没给就自己
-//! 异步建一个。控件拿到的是一个**号**，`ErikaSession ::resolve` 之后只做两件事：
+//! 异步建一个。控件拿到的是一个**号**，`ViewSource ::resolve` 之后只做两件事：
 //! 每帧要帧、把帧贴到 `gtk::Picture` 上。没有号就只显示空白。
 //!
 //! ## prop
@@ -28,7 +28,7 @@ use gtk::prelude::*;
 use nsh_core::JsonValue;
 use nsh_platform_linux::{ComponentContext, ComponentFactory, NativeComponent, gtk4 as gtk};
 
-use crate::core::source::ErikaSession;
+use crate::core::source::ViewSource;
 use crate::linux::frames::FrameBinder;
 
 /// 注册用的工厂。
@@ -76,7 +76,7 @@ impl NativeComponent for ErikaView {
                 let Some(id) = value.and_then(JsonValue::as_u64) else {
                     return;
                 };
-                match ErikaSession::resolve(id) {
+                match ViewSource::resolve(id) {
                     Some(source) => {
                         self.warned = false;
                         self.frames.bind(source);

@@ -1,18 +1,21 @@
-//! 帧源（`ErikaSession`）：**显示句柄**。
+//! 帧源（[`ViewSource`]）：**显示侧句柄**。
 //!
-//! 它由 [`ErikaPlayer::new`](crate::ErikaPlayer::new) 与播放句柄一起交出：句柄留在外面
-//! 控制（`open` / `play` / `pause` / …），帧源交给 `erika.video` 控件显示
-//! （`erika::video(&source)`）。它**只有**与出帧有关的几个方法
-//! （`request_frame` / `frame_snapshot` / `has_frame` / `id`），拿不到任何播放控制 ——
+//! 一个会话（[`PlayerInner`]）同时被两拨人看见：app 的
+//! [`ErikaPlayer`](crate::ErikaPlayer) 拿**全部身家**（控制 + 直读 + 画面），平台控件只拿
+//! [`ViewSource`]（帧邮箱 + 出帧请求 + 一个 `Weak` 指回去）。后者**拿不到任何播放控制**，
 //! 和 media_kit 的 `VideoController` 一个角色。
 //!
 //! ## 为什么是「号」而不是「引用」
 //!
-//! NSH 的组件边界只能过 JSON（`native(...).prop(name, value)`），句柄过不去。所以帧源在
-//! 构造时领一个进程内唯一的号（[`ErikaSession::id`]），登记在进程级注册表里；控件
-//! 拿号就能找回它（[`ErikaSession::resolve`]）。注册表持**强引用**（不能是弱引用：
-//! 页面函数返回后 `ErikaSession` 这个局部值就 drop 了，而控件的 prop 要到挂载时才送到），
-//! 由播放句柄负责摘除 —— 最后一个 [`ErikaPlayer`](crate::ErikaPlayer) drop 时自动清掉。
+//! NSH 的组件边界只能过 JSON（`native(...).prop(name, value)`），句柄过不去。所以会话在
+//! 构造时领一个进程内唯一的号（[`PlayerInner::id`]），登记在进程级注册表里；控件拿号
+//! 就能找回它（[`ViewSource::resolve`]）。
+//!
+//! 注册表只存 [`ViewSource`]，而它持的是 **`Weak<PlayerInner>`** ——
+//! 所以"还有人在显示"**不会**给引擎续命；反过来说，只要号还在表里、会话还活着，
+//! 控件就一定找得到它（这解决了"prop 挂载时才送到"的时序问题）。
+//! 摘表由 [`PlayerInner`] 的 `Drop` 负责：最后一个 [`ErikaPlayer`](crate::ErikaPlayer)
+//! drop 时自动清掉。
 //!
 //! **每个平台一条出帧路径**：Linux 是 erika 导出的线性 dma-buf，没有 CPU 回读兜底 ——
 //! 宿主（GTK/GSK）导不进来就没画面（见 `dev_doc/nsh-erika-status.md` §8）。
@@ -36,7 +39,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
-use crate::core::cmd::{ErikaCmd, PlaybackCmd, RenderCmd, SettingsCmd};
+use crate::core::cmd::{ErikaCmd, RenderCmd};
 use crate::core::player::EngineGuard;
 
 /// 一帧的画面载荷：各平台一份变体。
@@ -261,38 +264,37 @@ impl Request {
     }
 }
 
-/// 进程级注册表：号 → 会话。
+/// 进程级注册表：号 → 视图侧。
 ///
-/// **持强引用**，由最后一张"座位"摘除（最后一个 [`ErikaPlayer`](crate::ErikaPlayer) drop 时）。
-/// 为什么不能是弱引用：页面函数返回后会话这个局部值就 drop 了，而控件的 prop 要到挂载时
-/// 才送到 —— 那时弱引用早就死了（实测报 `source=1 找不到帧源`）。
+/// 表里的 [`ViewSource`] 只持 `Weak<PlayerInner>`，所以它**不会**给引擎续命；摘表由
+/// [`PlayerInner::drop`] 触发（最后一个 [`ErikaPlayer`](crate::ErikaPlayer) 归零时）。
 ///
-/// 它是**跨 JSON 边界的唯一桥**：组件层（能拿到播放器）和平台层（能画帧）是两个对象，
-/// 只能靠一个号互相对上。外面看不到这张表，只看得到 [`ErikaSession::resolve`]。
-static REGISTRY: OnceLock<Mutex<HashMap<u64, ErikaSession>>> = OnceLock::new();
+/// 它是**跨 JSON 边界的唯一桥**：组件层（能拿到会话）和平台层（能画帧）是两个对象，
+/// 只能靠一个号互相对上。外面看不到这张表，只看得到 [`ViewSource::resolve`]。
+static REGISTRY: OnceLock<Mutex<HashMap<u64, ViewSource>>> = OnceLock::new();
 /// 下一个要发的号。1 起，0 留作"没有"。
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+pub(crate) static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// 一个 app 播放句柄的"座位"。
+/// 一个会话的**全部身家**：控制面、画面通道、身份。
 ///
-/// 只有 [`ErikaPlayer`](crate::ErikaPlayer) 持有它：`Clone` 多一张票，`Drop` 还一张。
-/// **最后一张座位掉下来时**顺手把注册表里那一条摘掉 —— 这就是"注销"的全部实现：
-/// 没有计数器、没有标志位，也不会忘记调。
-pub(crate) struct Seat {
-    id: u64,
+/// 只有 [`ErikaPlayer`](crate::ErikaPlayer) 持它的强引用（`Arc`）。注册表与平台视图只持
+/// [`ViewSource`]（里面的 `owner` 是 `Weak`），所以它**不会**被"还有人在显示"这件事续命 ——
+/// 引用归零就摘表。
+pub(crate) struct PlayerInner {
+    pub(crate) id: u64,
+    pub(crate) player: erika::Player,
+    pub(crate) engine: Arc<EngineGuard>,
+    pub(crate) frames: Arc<FrameSlot>,
+    pub(crate) request: Arc<Request>,
 }
 
-impl Drop for Seat {
+impl Drop for PlayerInner {
+    /// 最后一个句柄 drop 时摘表。**顺序重要**：先摘表，再让字段析构去等引擎退干净
+    /// （`EngineGuard::drop` 里那套），否则中间会有一段"表里还有人、实际已经在拆"的窗口。
     fn drop(&mut self) {
-        if let Some(map) = REGISTRY.get() {
-            if let Ok(mut map) = map.lock() {
-                map.remove(&self.id);
-            }
-        }
-        log::debug!("erika.video: 会话 #{} 摘除（播放句柄已全部 drop）", self.id);
+        unregister(self.id);
     }
 }
-
 /// 一个播放会话：**一个引擎 + 一条画面通道 + 一个身份 + 一份寿命**。
 ///
 /// 两个门共用它：
@@ -306,53 +308,30 @@ impl Drop for Seat {
 /// 永不复用，所以精确）。
 ///
 /// 会话自己**不干活**：不渲染、不解码、不播放。它只是把上面四样东西绑在一起并给一个号。
+/// 一个会话的**视图侧**：帧邮箱 + 出帧请求 + 一个指向会话的弱引用。
+///
+/// 平台控件（Linux `FrameBinder` / Windows `draw`）只认它：每帧
+/// [`request_frame`](Self::request_frame) + [`frame_snapshot`](Self::frame_snapshot)，
+/// 靠 [`is_alive`](Self::is_alive) 判断"还有没有人控制我"。
+///
+/// 它**不拥有**引擎：`owner` 是 `Weak`，所以自己活着不等于引擎活着；反过来，引擎活着时
+/// 拿它发命令也没问题。控件侧导入失败之类的信号同样走它。
 #[derive(Clone)]
-pub struct ErikaSession {
-    /// 身份（控件绑定显示目标 / 注册表键）。0 留给"没有"。
-    id: u64,
-    /// 引擎 + 唯一的命令队列。它的 `Drop` 才是"关引擎"。
-    pub(crate) engine: Arc<EngineGuard>,
-    /// 帧邮箱：引擎写、控件每帧读。
+pub struct ViewSource {
     frames: Arc<FrameSlot>,
-    /// 出帧请求：控件写尺寸 / DPI，引擎读。
     request: Arc<Request>,
-    /// 还有没有 app 播放句柄（`None` = 最后一张座位已经 drop）。
-    seat: Weak<Seat>,
+    owner: Weak<PlayerInner>,
 }
 
-impl ErikaSession {
-    /// 起一个新会话：领号、建座位、登记注册表。
-    ///
-    /// 返回的 `Arc<Seat>` 交给 [`ErikaPlayer`](crate::ErikaPlayer) —— **票只有它产**：
-    /// 没有座位就没有"app 还在控制"这回事，控件会立刻停帧。
-    pub(crate) fn new(
-        engine: Arc<EngineGuard>,
-        frames: Arc<FrameSlot>,
-        request: Arc<Request>,
-    ) -> (Self, Arc<Seat>) {
-        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let seat = Arc::new(Seat { id });
-        let session = Self {
-            id,
-            engine,
-            frames,
-            request,
-            seat: Arc::downgrade(&seat),
-        };
-        REGISTRY
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(id, session.clone());
-        log::debug!("erika.video: 会话 #{id} 登记");
-        (session, seat)
-    }
-
-    /// 它的号（控件绑定显示目标用：`native(COMPONENT_NAME).prop("source", id)`）。
-    ///
-    /// 只有**自己手写控件**时才用得上（离屏渲染 / 自建原生视图）。
-    pub fn id(&self) -> u64 {
-        self.id
+impl ViewSource {
+    /// 从一个会话拆出视图侧（`Weak`，不续命）。
+    #[cfg(feature = "escape-hatch")]
+    pub(crate) fn from_inner(inner: &Arc<PlayerInner>) -> Self {
+        Self {
+            frames: inner.frames.clone(),
+            request: inner.request.clone(),
+            owner: Arc::downgrade(inner),
+        }
     }
 
     /// 还有没有 app 播放句柄（全部 drop 之后控件该收工了）。
@@ -360,7 +339,7 @@ impl ErikaSession {
     /// 注意它不等于"引擎还活着"：视图自己持着会话，所以引擎通常比它晚走一步 ——
     /// 这里是"还有没有人控制我"，不是"还有没有引擎"。
     pub(crate) fn is_alive(&self) -> bool {
-        self.seat.strong_count() > 0
+        self.owner.strong_count() > 0
     }
 
     /// 按号找回会话。控件专用：号无效（从没存在过 / 播放句柄已经 drop）时返回 `None`。
@@ -378,12 +357,15 @@ impl ErikaSession {
 
     /// **渲染层每帧调这个**，请求一帧（非阻塞，60Hz 也只会让引擎处理一次）。
     pub fn request_frame(&self, request: FrameRequest) {
+        let Some(inner) = self.owner.upgrade() else {
+            return;
+        };
         {
             let mut frame = self.request.frame();
             *frame = request;
         }
         if !self.request.want_frame.swap(true, Ordering::AcqRel) {
-            let _ = self
+            let _ = inner
                 .engine
                 .handle
                 .send_cmd(ErikaCmd::Render(RenderCmd::Wake));
@@ -394,56 +376,13 @@ impl ErikaSession {
     ///
     /// 只在**第一次**调用有意义（引擎那边一次性置上），但重复调用无害。
     pub(crate) fn report_video_unavailable(&self, reason: String) {
-        let _ = self
+        let Some(inner) = self.owner.upgrade() else {
+            return;
+        };
+        let _ = inner
             .engine
             .handle
             .send_cmd(ErikaCmd::VideoUnavailable(reason));
-    }
-
-    /// 发一条命令给引擎（和 [`ErikaPlayer`](crate::ErikaPlayer) 的方法同一条队列）。
-    ///
-    /// 引擎已经退出时静默失败 —— 和句柄那边一致。
-    fn send(&self, cmd: ErikaCmd) {
-        let _ = self.engine.handle.send_cmd(cmd);
-    }
-
-    // ── 控制面 ────────────────────────────────────────────────────────────
-    //
-    // 组件层用它发控制命令：`paused` / `muted` / `volume` / `rate` 这些 prop 在组件体里
-    // 直接映射成命令，**不过 JSON、不经过平台层**。内部自建的引擎和外部传入的引擎在这一
-    // 层是同一种东西（都是会话），所以两条路共用这一组方法。
-    //
-    // 这不是"第二套控制 API"：校验 / 夹逼和 `ErikaPlayer` 用的是同一份
-    // [`normalize_volume`](crate::core::player::normalize_volume) /
-    // [`normalize_rate`](crate::core::player::normalize_rate)。
-
-    /// 开始播放（没媒体时引擎什么都不做，不报错）。
-    pub(crate) fn play(&self) {
-        self.send(ErikaCmd::Playback(PlaybackCmd::Play));
-    }
-
-    /// 暂停（没媒体时引擎什么都不做，不报错）。
-    pub(crate) fn pause(&self) {
-        self.send(ErikaCmd::Playback(PlaybackCmd::Pause));
-    }
-
-    /// 静音开关。**不改变**记住的音量。
-    pub(crate) fn set_muted(&self, muted: bool) {
-        self.send(ErikaCmd::Settings(SettingsCmd::Muted(muted)));
-    }
-
-    /// 音量 0..=1：非法值丢弃，其余夹到区间内。
-    pub(crate) fn set_volume(&self, volume: f32) {
-        if let Some(volume) = crate::core::player::normalize_volume(volume) {
-            self.send(ErikaCmd::Settings(SettingsCmd::Volume(volume as f64)));
-        }
-    }
-
-    /// 倍速：非有限或 `<= 0` 丢弃（上游会 normalize 成 1.0，放过去只会让 UI 显示和实际不一致）。
-    pub(crate) fn set_rate(&self, rate: f64) {
-        if let Some(rate) = crate::core::player::normalize_rate(rate) {
-            self.send(ErikaCmd::Settings(SettingsCmd::Rate(rate)));
-        }
     }
 
     /// 注册"有新帧时叫醒宿主"的回调。
@@ -475,9 +414,40 @@ impl ErikaSession {
     }
 }
 
-impl PartialEq for ErikaSession {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id // 号单调递增、永不复用 → 精确
+impl PartialEq for ViewSource {
+    fn eq(&self, o: &Self) -> bool {
+        Weak::ptr_eq(&self.owner, &o.owner)
     }
 }
-impl Eq for ErikaSession {}
+impl Eq for ViewSource {}
+
+pub(crate) fn register(inner: &Arc<PlayerInner>) {
+    REGISTRY
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(
+            inner.id,
+            ViewSource {
+                frames: inner.frames.clone(),
+                request: inner.request.clone(),
+                owner: Arc::downgrade(inner),
+            },
+        );
+}
+pub(crate) fn unregister(id: u64) {
+    if let Some(map) = REGISTRY.get() {
+        if let Ok(mut map) = map.lock() {
+            map.remove(&id);
+        }
+    }
+}
+
+/// 按号把会话升起来（`Weak` → `Arc`）。已经卸载 / 从没存在过时返回 `None`。
+///
+/// 这是 [`ErikaPlayer::resolve`](crate::ErikaPlayer::resolve) 的实现：外部只拿到号时，
+/// 靠它换回一个能发命令、能直读的句柄。
+pub(crate) fn owner_of(id: u64) -> Option<Arc<PlayerInner>> {
+    let map = REGISTRY.get()?.lock().ok()?;
+    map.get(&id)?.owner.upgrade()
+}

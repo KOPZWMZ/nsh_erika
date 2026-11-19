@@ -2,7 +2,7 @@
 //!
 //! 为什么这条必须存在：其余集成测试（`engine_state` / `open` / `playback` / `shutdown`）
 //! 只碰**控制面**（open / play / 状态机 / 退出），没有一条断言"画面出来了"。出帧的终点是
-//! `FrameSlot`，只有 [`ErikaSession::frame_snapshot`] 能看到它 —— 在写这条测试之前，
+//! `FrameSlot`，只有 [`ViewSource::frame_snapshot`] 能看到它 —— 在写这条测试之前，
 //! 除了真机手验，这条链没有任何回归保护。
 //!
 //! 断言分两级，**像素读不到也不代表测试可以直接通过**：
@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 
 use common::*;
 use nsh_erika::ErikaPlayer;
-use nsh_erika::video::{DmabufFrame, ErikaSession, FrameImage, FrameRequest};
+use nsh_erika::video::{DmabufFrame, FrameImage, FrameRequest, ViewSource};
 /// 导出的尺寸。故意取小：这条测试只关心"有没有东西"，不在乎分辨率。
 const EXPORT: (u32, u32) = (128, 128);
 
@@ -67,7 +67,7 @@ static MMAP_DENIED: AtomicBool = AtomicBool::new(false);
 /// 无头环境里没有 GTK tick，所以请求必须由测试自己发：`request_frame` 会置
 /// `want_frame` 并唤醒引擎，引擎下一次 `pump_frame` 才会真的导出。
 fn next_frame(
-    source: &ErikaSession,
+    source: &ViewSource,
     export: (u32, u32),
     after: u64,
     timeout: Duration,

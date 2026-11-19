@@ -1,11 +1,23 @@
 //! The app's Rust UI: its root component, which `nsh run`, `nsh package`
 //! and `cargo run` mount.
 //!
-//! 这是 `nsh-erika` 的示例应用（`nsh_erika_demo`）：一块铺满的 `erika.video` +
-//! 一条**手动控制条**（播放/暂停、±10s、音量、静音、停止）和一个状态行。
+//! 这是 `nsh-erika` 的示例应用（`nsh_erika_demo`）。它现在同时是**生命周期验证台**：
 //!
-//! 控制条是这套示例的主要用途：出帧、seek、音量这些路径光看日志分不清"引擎没动"
-//! 还是"控件没贴图"，手动按几下最快。片源从环境变量读，方便不改代码就换文件：
+//! 1. **首页**：两个入口按钮 + 一个实时读数（本进程里 `erika-engine` 线程数、进入次数）。
+//! 2. **播放页**：一块铺满的 `erika.video` + 一条**手动控制条**（播放/暂停、±10s、音量、
+//!    静音、停止）和一个状态行，外加「← 返回」。
+//!
+//! 播放页是**独立组件**，所以「进入 = 建实例」「返回 = 实例销毁」—— 引擎跟着走。
+//! 反复进出，首页那个线程数应该**回到 0**；回不去就是引擎没被回收。
+//!
+//! 播放页有两条路，用来分别验证两种所有权：
+//!
+//! | 入口 | 谁建引擎 | 控制从哪来 |
+//! |---|---|---|
+//! | 外部句柄 | 页面自己 `ErikaPlayer::new()` | 句柄方法（`player.seek()` ……） |
+//! | 组件自建 | `erika_video().src(uri)` | props（`paused` / `muted` / `volume` / `rate`） |
+//!
+//! 片源从环境变量读，方便不改代码就换文件：
 //!
 //! ```sh
 //! TEST_VIDEO=/path/to/video.mkv TEST_DANMAKU=/path/to/danmaku.json nsh run
@@ -41,41 +53,192 @@ fn register_components_linux(components: &PlatformComponents) {
 fn register_components_window(components: &PlatformComponents) {
     nsh_erika::register(components);
 }
-/// The application's root component。
+
+/// 两个页面共用的跳转状态。`Signal` 是 `Copy`，所以整包也能当 context 值随便传。
+#[derive(Clone, Copy)]
+struct Pages {
+    /// 在不在播放页。
+    open: Signal<bool>,
+    /// 播放页里由**谁**建引擎：`false` = 页面用句柄（`ErikaPlayer::new()`），
+    /// `true` = 组件自建（`erika_video().src(uri)`，没有句柄）。
+    own: Signal<bool>,
+    /// 进过几次播放页 —— 用来确认"反复进出"真的发生了。
+    visits: Signal<u32>,
+}
+
+/// 应用根：**只决定"在哪个页面"，不持有任何引擎**。
 ///
-/// **句柄在外面**：`ErikaPlayer::new()` 在这里（页面只跑一次）创建，`player` 留下控制、
-/// `source` 交给 `erika.video` 显示。控件本身不自建引擎、也没有控制 prop。
+/// 播放页放在 [`when`] 的一个分支里，所以它随条件**建/销**：返回首页 = 实例销毁 =
+/// 它的 `stored` / 订阅任务 / 元素闭包一起释放，引擎的最后一个引用就在这里归零。
 #[component]
 pub fn App() -> impl IntoElement {
+    let pages = Pages {
+        open: signal(false),
+        own: signal(false),
+        visits: signal(0),
+    };
+    provide_context(pages);
+
+    view()
+        .flex_col()
+        .flex_1()
+        .bg(move || theme().background)
+        .child(when(pages.open, || player_page()).otherwise(|| home_page()))
+}
+
+/// 首页：入口按钮 + 生命周期读数。
+#[component]
+pub fn HomePage() -> impl IntoElement {
+    let pages = use_context::<Pages>().expect("App 应该 provide 了 Pages");
+
+    // 实时线程数：每 300ms 采一次。
+    // `set_interval` 返回的 `Spawned` 一被 drop 就会取消任务，而组件体**返回即结束** ——
+    // 所以必须把它存进 owner（`stored`），不能只用 `let _ = …`。
+    let threads = signal(engine_threads());
+    let _ticker = stored(set_interval(Duration::from_millis(300), move || {
+        threads.set(engine_threads())
+    }));
+
+    view()
+        .flex_col()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap_4()
+        .px(px(24.0))
+        .child(
+            text("nsh-erika 生命周期验证")
+                .text_color(move || theme().foreground),
+        )
+        .child(tap(
+            || "进入播放页（外部句柄）".to_string(),
+            {
+                let pages = pages;
+                move || {
+                    pages.own.set(false);
+                    pages.visits.update(|n| *n += 1);
+                    pages.open.set(true);
+                }
+            },
+        ))
+        .child(tap(
+            || "进入播放页（组件自建引擎）".to_string(),
+            {
+                let pages = pages;
+                move || {
+                    pages.own.set(true);
+                    pages.visits.update(|n| *n += 1);
+                    pages.open.set(true);
+                }
+            },
+        ))
+        .child(
+            text(move || format!("erika 线程数：{}（0 = 引擎已全部回收）", threads.get()))
+                .text_color(move || theme().foreground),
+        )
+        .child(
+            text(move || format!("进入次数：{}", pages.visits.get()))
+                .text_color(move || theme().muted_foreground),
+        )
+        .child(
+            text("进入 → 返回，重复几次：数字应该回到 0。一个活着的引擎约 30~40 个线程（解码/渲染的子线程继承了线程名），所以别拿 1 当基准。")
+                .text_color(move || theme().muted_foreground),
+        )
+}
+
+/// 播放页：**页面的寿命 = 引擎的寿命**。
+///
+/// 三条路都从同一个 `root` 长出来（同一具体类型，可以直接 `return`）：
+/// 内置 `<video>` 对照组 / 组件自建引擎 / 外部句柄。
+#[component]
+pub fn PlayerPage() -> impl IntoElement {
+    let pages = use_context::<Pages>().expect("App 应该 provide 了 Pages");
     let builtin = std::env::var_os("NSH_PLAYER_BUILTIN").is_some();
     let src = std::env::var("TEST_VIDEO").unwrap_or_else(|_| "../../media/tiny.mkv".to_string());
     let danmaku_uri =
         std::env::var("TEST_DANMAKU").unwrap_or_else(|_| "../../media/danmaku.json".to_string());
     let paused = signal(false);
 
+    // 挂载/卸载各打一行：控制台里能直接对上"进入 → 建引擎"和"返回 → 销毁"。
+    eprintln!("[demo] 播放页挂载（组件自建 = {}）", pages.own.get());
+    cleanup(move || eprintln!("[demo] 播放页卸载：引擎应该开始销毁"));
+
     let root = view().flex_col().flex_1().bg(move || theme().background);
+
+    // 返回按钮：所有分支共用。它只碰 context 里的信号 —— 不持有引擎。
+    let leave = {
+        let pages = pages;
+        move || pages.open.set(false)
+    };
+
+    // ── 对照组：NSH 自带 <video>（底层 GStreamer）────────────────────────────
     if builtin {
-        return root.child(
-            video(move || src.clone())
-                .flex_1()
-                .controls(true)
-                .paused(move || paused.get()),
-        );
+        return root
+            .child(
+                video(move || src.clone())
+                    .flex_1()
+                    .controls(true)
+                    .paused(move || paused.get()),
+            )
+            .child(bar().child(tap(|| "← 返回".to_string(), leave)));
     }
 
-    // 1) 外部创建句柄（立刻返回；此时还没有媒体）
+    // ── 组件自建引擎：没有句柄，控制全走 props ────────────────────────────────
+    if pages.own.get() {
+        let toggle_paused = {
+            let paused = paused;
+            move || paused.update(|p| *p = !*p)
+        };
+        return root
+            .child(
+                nsh_erika::erika_video()
+                    .src(src)
+                    .paused(move || paused.get())
+                    .flex_1(),
+            )
+            .child(
+                bar()
+                    .child(tap(
+                        move || {
+                            if paused.get() {
+                                "播放".to_string()
+                            } else {
+                                "暂停".to_string()
+                            }
+                        },
+                        toggle_paused,
+                    ))
+                    .child(tap(|| "← 返回（销毁引擎）".to_string(), leave))
+                    .child(
+                        text("引擎归组件：返回即销毁，没有句柄可用")
+                            .text_color(move || theme().muted_foreground),
+                    ),
+            );
+    }
+
+    // ── 外部句柄：句柄在这个页面里创建，页面销毁时最后一个 clone 一起走 ─────────
     if src.is_empty() {
-        return root.child(text("没有片源：设 VIDEO").flex_1());
+        return root
+            .child(text("没有片源：设 VIDEO").flex_1())
+            .child(bar().child(tap(|| "← 返回".to_string(), leave)));
     }
     let player = match nsh_erika::ErikaPlayer::new() {
-        Ok(player) => player,
+        Ok(player) => {
+            eprintln!(
+                "[demo] 引擎起来了（erika-engine 线程数 = {}）",
+                engine_threads()
+            );
+            player
+        }
         Err(error) => {
             eprintln!("erika.video: 引擎起不来: {error}");
-            return root.child(text("引擎起不来：看日志").flex_1());
+            return root
+                .child(text("引擎起不来：看日志").flex_1())
+                .child(bar().child(tap(|| "← 返回".to_string(), leave)));
         }
     };
 
-    // 2) 三条订阅通道，各接一条任务。这是这个库推荐的用法（也是它比轮询强的地方）：
+    // 三条订阅通道，各接一条任务。这是这个库推荐的用法（也是它比轮询强的地方）：
     //    · **初值直读**（订阅只报订阅之后的变化）
     //    · **进度** 走 `subscribe_progress`：10Hz，位置 + 时长引擎已经算好
     //    · **事件** 走 `subscribe_events`：状态变了 / 播完了 / 出错了 —— 而且
@@ -139,7 +302,7 @@ pub fn App() -> impl IntoElement {
         }
     });
 
-    // 3) 打开 + 起播（命令进队列，立刻返回）
+    // 打开 + 起播（命令进队列，立刻返回）
     player.open(nsh_erika::MediaRequest::new(src.clone()));
     player.play();
     // `DANMAKU=off` 时不挂弹幕：量 CPU/GPU 时要一个"没有弹幕"的对照组。
@@ -147,7 +310,7 @@ pub fn App() -> impl IntoElement {
         player.danmaku().add_track(danmaku_uri, "bilibili");
     }
 
-    // 4) 按钮的按下动作（每个按钮拿一份句柄 clone —— 它只是两个引用计数）
+    // 按钮的按下动作（每个按钮拿一份句柄 clone —— 它只是两个引用计数）
     let p_toggle = player.clone();
     let toggle = move || {
         if playing.get() {
@@ -199,17 +362,10 @@ pub fn App() -> impl IntoElement {
         muted.set(next);
     };
 
-    // 4) 页面只放"显示"；控制条是普通的 NSH 元素，直接调句柄
+    // 页面只放"显示"；控制条是普通的 NSH 元素，直接调句柄
     root.child(nsh_erika::erika_video().player(&player).flex_1())
         .child(
-            view()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap_4()
-                .px(px(12.0))
-                .py(px(8.0))
-                .bg(move || theme().card)
+            bar()
                 .child(tap(
                     move || if playing.get() { "暂停" } else { "播放" }.to_string(),
                     toggle,
@@ -230,6 +386,7 @@ pub fn App() -> impl IntoElement {
                     mute,
                 ))
                 .child(tap(|| "停止".to_string(), stop))
+                .child(tap(|| "← 返回（销毁引擎）".to_string(), leave))
                 .child(
                     text(move || {
                         status_line(
@@ -243,6 +400,43 @@ pub fn App() -> impl IntoElement {
                     .text_color(move || theme().muted_foreground),
                 ),
         )
+}
+
+/// 本进程里叫 `erika-engine` 的线程数。
+///
+/// Linux 读 `/proc/self/task/*/comm`（线程名就是 `try_spawn_thread("erika-engine", …)`
+/// 传的那个）；别的平台没有等价物，返回 `0` 并在界面上显示成 0（**不代表没有泄漏**）。
+fn engine_threads() -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_dir("/proc/self/task")
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|entry| {
+                        std::fs::read_to_string(entry.path().join("comm"))
+                            .is_ok_and(|name| name.trim() == "erika-engine")
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
+}
+
+/// 控制条的外壳（两行按钮 + 状态行）。
+fn bar() -> nsh_core::element::View {
+    view()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap_4()
+        .px(px(12.0))
+        .py(px(8.0))
+        .bg(move || theme().card)
 }
 
 /// 控制条上的一个按钮（示例用的最小样式：不做 `ui` 层，只取主题里的两三个 token）。
