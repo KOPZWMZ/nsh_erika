@@ -33,12 +33,11 @@ TESTS=(
   frame_output
 )
 
-# 需要逃生舱 feature 的用例：它们的断言就建在那批 API 上（`video::*` / `video_source()`）。
-# 不给的话 `frame_output` 会被顶部的 `#![cfg(feature = "escape-hatch")]` 整条编掉，
-# 跑出"0 个用例"还显示 PASS —— 出帧那条回归就静默丢了。
-declare -A EXTRA_ARGS=(
-  [frame_output]="--features escape-hatch"
-)
+# **所有**集成用例都带逃生舱：
+#   · `tests/common` 用 `ErikaSession`（守卫）建引擎，它只在 escape-hatch 下导出；
+#   · `frame_output` 的断言直接建在 `video::*` 上（不给 feature 会被
+#     `#![cfg(feature = "escape-hatch")]` 整条编掉，跑出"0 个用例"还显示 PASS）。
+FEATURES=(--features escape-hatch)
 
 keep_going=0
 list_only=0
@@ -94,8 +93,7 @@ for name in "${TESTS[@]}"; do
   log="$logs/$name.log"
   printf '==> %s\n' "$name"
   started=$(now_ms)
-  # EXTRA_ARGS 故意不加引号：里面是"空格分隔的参数"，要按词拆开
-  if cargo test --test "$name" ${EXTRA_ARGS[$name]:-} ${cargo_args[@]+"${cargo_args[@]}"} >"$log" 2>&1; then
+  if cargo test --test "$name" "${FEATURES[@]}" ${cargo_args[@]+"${cargo_args[@]}"} >"$log" 2>&1; then
     elapsed=$(($(now_ms) - started))
     summary=$(grep -E '^test result:' "$log" | tail -1)
     results+=("PASS  $name  ${elapsed}ms  ${summary#test result: }")

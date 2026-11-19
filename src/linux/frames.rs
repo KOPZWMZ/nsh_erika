@@ -171,6 +171,11 @@ impl FrameBinder {
     }
 }
 
+impl Drop for FrameBinder {
+    fn drop(&mut self) {
+        self.ticking.set(false); // 下一帧回调 Break → 闭包释放 → ViewSource 释放
+    }
+}
 /// 把引擎给的 dma-buf 帧变成 GTK 能贴的纹理。
 fn texture_for(image: &FrameImage) -> Option<gtk::gdk::Texture> {
     // 交给 GDK 一份自己的 fd：它会在 release 回调里关掉，引擎那份不受影响。

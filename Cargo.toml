@@ -44,8 +44,36 @@ nsh-platform-windows = { version = "0.6", default-features = false }
 libc = "0.2"
 
 # `examples/lifecycle.rs` 用到 `call` / `raw()` / `update_config` —— 都在逃生舱里。
+# `examples/drop_probe.rs` 要用 `ErikaSession`（守卫）自己建引擎 —— 同样只在逃生舱里。
 [[example]]
 name = "lifecycle"
+required-features = ["escape-hatch"]
+
+[[example]]
+name = "drop_probe"
+required-features = ["escape-hatch"]
+
+# 集成测试都要逃生舱：`tests/common` 用 `ErikaSession`（守卫）建引擎。
+# 写成 `required-features` 而不是靠 `#![cfg]`：不带 feature 时这些 target 直接不编译，
+# 而不是编成"0 个用例还显示 PASS"。
+[[test]]
+name = "engine_open"
+required-features = ["escape-hatch"]
+
+[[test]]
+name = "engine_playback"
+required-features = ["escape-hatch"]
+
+[[test]]
+name = "engine_state"
+required-features = ["escape-hatch"]
+
+[[test]]
+name = "events"
+required-features = ["escape-hatch"]
+
+[[test]]
+name = "frame_output"
 required-features = ["escape-hatch"]
 
 [workspace]

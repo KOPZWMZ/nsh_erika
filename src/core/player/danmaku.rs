@@ -37,13 +37,16 @@
 //! 未成组的字段（`scroll_duration_seconds` / `custom_font_face_index` 等）继续走
 //! [`ErikaDanmaku::update_config`] 逃生舱。
 
+use actor_lite::ActorHandle;
 #[cfg(feature = "escape-hatch")]
 use erika::danmaku::DanmakuLayoutConfig;
 use erika::danmaku::DanmakuTrackInfo;
 
-use crate::core::cmd::{DanmakuCmd, ErikaCmd};
+use crate::core::{
+    cmd::{DanmakuCmd, ErikaCmd},
+    engine::ErikaEngine,
+};
 
-use super::EngineGuard;
 use std::sync::Arc;
 
 mod density;
@@ -66,7 +69,7 @@ pub use text::DanmakuText;
 /// **读只能读快照**：`erika::Player` 上没有任何弹幕方法（弹幕整块住在 presenter 上），
 /// 所以这里没有"直连读"这条路 —— 写走命令队列，读走引擎发布的状态。
 pub struct ErikaDanmaku {
-    engine: Arc<EngineGuard>,
+    engine: Arc<ActorHandle<ErikaEngine>>,
 }
 impl Clone for ErikaDanmaku {
     fn clone(&self) -> Self {
@@ -83,12 +86,14 @@ impl PartialEq for ErikaDanmaku {
 impl Eq for ErikaDanmaku {}
 impl ErikaDanmaku {
     /// 建一个句柄（只给 `ErikaPlayer` 用，外部请走 `player.danmaku()`）。
-    pub(super) fn new(engine: Arc<EngineGuard>) -> Self {
-        Self { engine }
+    pub(super) fn new(engine: ActorHandle<ErikaEngine>) -> Self {
+        Self {
+            engine: Arc::new(engine),
+        }
     }
     /// 发一条弹幕命令。
     fn send(&self, cmd: DanmakuCmd) {
-        let _ = self.engine.handle.send_cmd(ErikaCmd::Danmaku(cmd));
+        let _ = self.engine.send_cmd(ErikaCmd::Danmaku(cmd));
     }
 
     /// 弹幕总开关。引擎里做"读改写"(和 erika 自己的 `set_danmaku_enabled` 一致),
@@ -202,7 +207,7 @@ impl ErikaDanmaku {
 
     /// 弹幕状态快照(开关 / 轨道列表 / 当前样式)。读的是引擎发布的状态,非阻塞。
     pub fn state(&self) -> DanmakuSnapshot {
-        self.engine.handle.get_state().danmaku
+        self.engine.get_state().danmaku
     }
 }
 /// 弹幕状态快照。

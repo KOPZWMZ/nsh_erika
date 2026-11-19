@@ -230,6 +230,24 @@ pub use ::erika::PlayerState;
 pub use core::player::ErikaPlayer;
 pub use core::slot::ErikaSlot;
 
+/// 会话守卫：**引擎的唯一所有者**，`Drop` 即关机。**只在 `escape-hatch` 下导出。**
+///
+/// 正常用法**拿不到它** —— 有组件时，守卫由组件创建并持有，外部只能通过
+/// [`ErikaSlot`] 借用句柄。它出现在这里，是给"没有 UI 的场景"用的：
+/// 集成测试、无头脚本、出帧自检。
+///
+/// ```ignore
+/// let engine = ErikaSession::create()?;   // 守卫：活到它 drop
+/// let player = engine.player();           // 借用句柄：发命令、直读
+/// ```
+///
+/// ⚠️ 它**不可克隆**：整个进程里，一个引擎只可能有一个所有者。
+#[cfg(feature = "escape-hatch")]
+pub use core::session::ErikaSession;
+
+/// 组件内部用的别名：上面那个导出只在逃生舱下存在，组件两种配置都要能编。
+use crate::core::session::ErikaSession as SessionOwner;
+
 /// 原生控件名。
 ///
 /// 一般不用直接写：用 [`ErikaVideo`]（`nsh_erika::erika_video().src(uri)`）就够了 ——
@@ -301,8 +319,8 @@ pub struct ErikaVideoProps {
 #[component]
 pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
     let slot = props.slot.get_untracked();
-    let player = match ErikaPlayer::new() {
-        Ok(player) => player,
+    let session = match SessionOwner::create() {
+        Ok(session) => session,
         Err(error) => {
             log::error!("erika.video: 引擎起不来: {error}");
             if let Some(slot) = slot {
@@ -311,10 +329,11 @@ pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
             return view().child(text(error)).into_element();
         }
     };
+    let player = session.player();
+    let _keep = stored(session);
     if let Some(slot) = slot {
         slot.fill(&player);
     }
-    let _keep = stored(Some(player.clone())); // 保活（C2 换成 stored(session)）
 
     // 片源：body 里开一次，之后 `src` 变了再开（同一个值不会重复打开）。
     // 变回空串只是"不再换片"，不会关掉已经开着的媒体。

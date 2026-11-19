@@ -50,7 +50,9 @@ fn main() {
     let danmaku_str = std::env::args()
         .nth(3)
         .unwrap_or_else(|| "media/tiny.json".into());
-    let player = ErikaPlayer::new().expect("引擎起不来");
+    // 守卫 + 借用句柄：守卫活到 main 结束，drop 即关机。
+    let engine = nsh_erika::ErikaSession::create().expect("引擎起不来");
+    let player = engine.player();
     // 弹幕句柄从头就用:③ 之前要挂一条轨,验"首次打开不清"这条语义。
     let danmaku = player.danmaku();
 

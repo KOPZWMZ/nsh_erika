@@ -29,24 +29,22 @@ fn new_player_starts_idle() {
 }
 
 #[test]
-fn play_without_media_reports_error_but_keeps_state_clean() {
+fn play_without_media_is_a_no_op() {
     let s = session(&LOCK);
 
-    // 没有媒体就播 —— 这正是"用户手滑点了播放"的场景：
-    // 不该 panic（UI 会崩），但错误必须能被 UI 读到。
+    // 没有媒体就播 —— 这正是"用户手滑点了播放"的场景，
+    // 而且声明式的 `paused` prop 本来就会在 `open()` **之前**到达。
+    // 所以口径是：**不 panic、不报错、什么都不做**（和 `stop()` / `seek` 一致）；
+    // 0.2.0 之前这里会写一条 error，等于把正常时序当成错误报给用户。
     s.player.play();
+    std::thread::sleep(Duration::from_millis(100));
 
-    wait(
-        &s.player,
-        |p| p.last_error().is_some(),
-        "无媒体 play 应留下错误",
+    assert!(
+        s.player.last_error().is_none(),
+        "无媒体 play 不该报错（它只是还没东西可播）: {:?}",
+        s.player.last_error()
     );
-
-    assert_eq!(
-        s.player.state(),
-        PlayerState::Idle,
-        "报错不该把状态弄乱 —— 否则 UI 会以为在播"
-    );
+    assert_eq!(s.player.state(), PlayerState::Idle, "状态不该被弄乱");
     assert!(!s.player.is_playing());
     assert!(!s.player.has_media());
 }

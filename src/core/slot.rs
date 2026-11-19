@@ -9,13 +9,13 @@
 //! NSH 的组件体只在挂载时跑一次，而且**父级先跑、子组件后跑**：页面想控制播放，
 //! 就必须有一个"页面先建好、组件后来填"的落点。所以句柄不是"传进去"，而是"填出来"。
 //!
-//! ## 槽里为什么只放 `ErikaPlayer`
+//! ## 槽里为什么只放「号」
 //!
-//! 因为 `ErikaPlayer` **不含守卫**（`EngineGuard` 只有一份，在组件手里）。所以：
+//! 会话本身在进程级注册表里（`id → PlayerInner`），槽只记住"我的号是几"：
 //!
-//! - 槽持有一份 `ErikaPlayer` **不会**给引擎续命；
-//! - 组件卸载后即使槽没清（比如页面比组件后死），拿到的也只是"已停止"的句柄
-//!   （`is_engine_alive() == false`），命令静默失败。
+//! - 引擎的生死只由 [`ErikaSession`](crate::ErikaSession) 决定，槽拿着号**不会**续命；
+//! - 会话一关，注册表那条就被摘掉，[`player`](ErikaSlot::player) 自然变成 `None`；
+//! - 槽仍然是 `Signal`，所以"引擎起来了"这件事能驱动 UI（按钮从灰变亮）。
 //!
 //! ## 语义
 //!
@@ -28,13 +28,13 @@ use nsh_core::prelude::*;
 
 use crate::ErikaPlayer;
 
-/// 槽的四种状态。**只装数据与借用句柄，绝不放守卫。**
+/// 槽的状态。**只有数据，没有任何引用。**
 #[derive(Clone, PartialEq)]
 enum SlotState {
     /// 空：组件还没挂载，或者已经卸载。
     Empty,
-    /// 有引擎：`id` 给平台视图（`source` prop），`player` 给外部控制。
-    Ready { id: u64, player: ErikaPlayer },
+    /// 有引擎：号既是平台视图要的 `source`，也是外部 `resolve` 成句柄的键。
+    Ready(u64),
     /// 组件那次创建失败了。文案和它渲染的错误界面是同一份。
     Failed(String),
 }
@@ -77,13 +77,14 @@ impl ErikaSlot {
         Self(signal(SlotState::Empty))
     }
 
-    /// 此刻能不能控制：`None` = 还没挂载 / 已经卸载 / 引擎已停。
+    /// 此刻能不能控制：`None` = 还没挂载 / 已经卸载。
     ///
-    /// 每次调用是一次 `Signal::get` + 一次 `is_alive` 检查，**别放在 60fps 的路径上**；
+    /// 每次调用是一次 `Signal::get` + 一次注册表查表，**别放在 60fps 的路径上**；
     /// 按钮点击、seek 提交这类低频动作用它正合适。
     pub fn player(&self) -> Option<ErikaPlayer> {
         match self.0.get() {
-            SlotState::Ready { player, .. } if player.is_engine_alive() => Some(player),
+            // 号在、会话没了（组件已卸载）时 `resolve` 返回 `None`。
+            SlotState::Ready(id) => ErikaPlayer::resolve(id),
             _ => None,
         }
     }
@@ -91,7 +92,7 @@ impl ErikaSlot {
     /// 平台视图要的号（组件内部把它写进 `source` prop）。`None` = 现在没有可显示的会话。
     pub fn id(&self) -> Option<u64> {
         match self.0.get() {
-            SlotState::Ready { id, .. } => Some(id),
+            SlotState::Ready(id) => Some(id),
             _ => None,
         }
     }
@@ -109,12 +110,9 @@ impl ErikaSlot {
     // 三处写值**全部用 `try_set`**：页面的 owner 可能比组件先 dispose，
     // 那时 `Signal::set` 会 panic（它 `expect("a signal")`），而 `try_set` 返回 false。
 
-    /// 投递：组件创建成功后调一次。
+    /// 投递：组件创建成功后调一次（只写号）。
     pub(crate) fn fill(&self, player: &ErikaPlayer) {
-        let _ = self.0.try_set(SlotState::Ready {
-            id: player.session_id(),
-            player: player.clone(),
-        });
+        let _ = self.0.try_set(SlotState::Ready(player.session_id()));
     }
 
     /// 组件创建失败。

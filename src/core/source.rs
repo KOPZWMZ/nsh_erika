@@ -2,7 +2,7 @@
 //!
 //! 一个会话（[`PlayerInner`]）同时被两拨人看见：app 的
 //! [`ErikaPlayer`](crate::ErikaPlayer) 拿**全部身家**（控制 + 直读 + 画面），平台控件只拿
-//! [`ViewSource`]（帧邮箱 + 出帧请求 + 一个 `Weak` 指回去）。后者**拿不到任何播放控制**，
+//! [`ViewSource`]（帧邮箱 + 出帧请求 + 一个 `Arc` 指回去）。后者**拿不到任何播放控制**，
 //! 和 media_kit 的 `VideoController` 一个角色。
 //!
 //! ## 为什么是「号」而不是「引用」
@@ -11,7 +11,7 @@
 //! 构造时领一个进程内唯一的号（[`PlayerInner::id`]），登记在进程级注册表里；控件拿号
 //! 就能找回它（[`ViewSource::resolve`]）。
 //!
-//! 注册表只存 [`ViewSource`]，而它持的是 **`Weak<PlayerInner>`** ——
+//! 注册表只存 [`ViewSource`]，而它持的是 **`Arc<PlayerInner>`** ——
 //! 所以"还有人在显示"**不会**给引擎续命；反过来说，只要号还在表里、会话还活着，
 //! 控件就一定找得到它（这解决了"prop 挂载时才送到"的时序问题）。
 //! 摘表由 [`PlayerInner`] 的 `Drop` 负责：最后一个 [`ErikaPlayer`](crate::ErikaPlayer)
@@ -37,10 +37,12 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+
+use actor_lite::ActorHandle;
 
 use crate::core::cmd::{ErikaCmd, RenderCmd};
-use crate::core::player::EngineGuard;
+use crate::core::engine::ErikaEngine;
 
 /// 一帧的画面载荷：各平台一份变体。
 ///
@@ -266,59 +268,51 @@ impl Request {
 
 /// 进程级注册表：号 → 视图侧。
 ///
-/// 表里的 [`ViewSource`] 只持 `Weak<PlayerInner>`，所以它**不会**给引擎续命；摘表由
+/// 表里的 [`ViewSource`] 只持 `Arc<PlayerInner>`，所以它**不会**给引擎续命；摘表由
 /// [`PlayerInner::drop`] 触发（最后一个 [`ErikaPlayer`](crate::ErikaPlayer) 归零时）。
 ///
 /// 它是**跨 JSON 边界的唯一桥**：组件层（能拿到会话）和平台层（能画帧）是两个对象，
 /// 只能靠一个号互相对上。外面看不到这张表，只看得到 [`ViewSource::resolve`]。
-static REGISTRY: OnceLock<Mutex<HashMap<u64, ViewSource>>> = OnceLock::new();
+pub(crate) static REGISTRY: OnceLock<Mutex<HashMap<u64, Arc<PlayerInner>>>> = OnceLock::new();
 /// 下一个要发的号。1 起，0 留作"没有"。
 pub(crate) static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// 一个会话的**全部身家**：控制面、画面通道、身份。
 ///
 /// 只有 [`ErikaPlayer`](crate::ErikaPlayer) 持它的强引用（`Arc`）。注册表与平台视图只持
-/// [`ViewSource`]（里面的 `owner` 是 `Weak`），所以它**不会**被"还有人在显示"这件事续命 ——
+/// [`ViewSource`]（里面的 `owner` 是 `Arc`），所以它**不会**被"还有人在显示"这件事续命 ——
 /// 引用归零就摘表。
 pub(crate) struct PlayerInner {
     pub(crate) id: u64,
     pub(crate) player: erika::Player,
-    pub(crate) engine: Arc<EngineGuard>,
+    /// 只用来**发命令**（`send_cmd` / 读 watch）。
+    ///
+    /// ⚠️ **禁止在这里 `stop()`** —— 关机只有一个入口：`ErikaSession::drop`。
+    /// 这个字段是 `pub(crate)`，`ErikaPlayer` / `ViewSource` / `ErikaDanmaku` 都从它
+    /// 克隆出能发命令的句柄；只要有人顺手 stop 一下，"守卫唯一"就不成立了。
+    pub(crate) handle: ActorHandle<ErikaEngine>,
     pub(crate) frames: Arc<FrameSlot>,
     pub(crate) request: Arc<Request>,
 }
 
-impl Drop for PlayerInner {
-    /// 最后一个句柄 drop 时摘表。**顺序重要**：先摘表，再让字段析构去等引擎退干净
-    /// （`EngineGuard::drop` 里那套），否则中间会有一段"表里还有人、实际已经在拆"的窗口。
-    fn drop(&mut self) {
-        unregister(self.id);
-    }
-}
 /// 一个会话的**视图侧**：帧邮箱 + 出帧请求 + 一个指向会话的弱引用。
 ///
 /// 平台控件（Linux `FrameBinder` / Windows `draw`）只认它：每帧
 /// [`request_frame`](Self::request_frame) + [`frame_snapshot`](Self::frame_snapshot)，
 /// 靠 [`is_alive`](Self::is_alive) 判断"还有没有人控制我"。
 ///
-/// 它**不拥有**引擎：`owner` 是 `Weak`，所以自己活着不等于引擎活着；反过来，引擎活着时
+/// 它**不拥有**引擎：`owner` 是 `Arc`，所以自己活着不等于引擎活着；反过来，引擎活着时
 /// 拿它发命令也没问题。控件侧导入失败之类的信号同样走它。
 #[derive(Clone)]
 pub struct ViewSource {
-    frames: Arc<FrameSlot>,
-    request: Arc<Request>,
-    owner: Weak<PlayerInner>,
+    inner: Arc<PlayerInner>,
 }
 
 impl ViewSource {
-    /// 从一个会话拆出视图侧（`Weak`，不续命）。
+    /// 从一个会话拆出视图侧。
     #[cfg(feature = "escape-hatch")]
     pub(crate) fn from_inner(inner: &Arc<PlayerInner>) -> Self {
-        Self {
-            frames: inner.frames.clone(),
-            request: inner.request.clone(),
-            owner: Arc::downgrade(inner),
-        }
+        Self { inner: inner.clone() }
     }
 
     /// 还有没有 app 播放句柄（全部 drop 之后控件该收工了）。
@@ -326,34 +320,31 @@ impl ViewSource {
     /// 注意它不等于"引擎还活着"：视图自己持着会话，所以引擎通常比它晚走一步 ——
     /// 这里是"还有没有人控制我"，不是"还有没有引擎"。
     pub(crate) fn is_alive(&self) -> bool {
-        self.owner.strong_count() > 0
+        self.inner.handle.is_alive() // 引擎还在跑（stop() 之后会变 false）
     }
 
     /// 按号找回会话。控件专用：号无效（从没存在过 / 播放句柄已经 drop）时返回 `None`。
     pub(crate) fn resolve(id: u64) -> Option<Self> {
         let map = REGISTRY.get()?.lock().ok()?;
-        let session = map.get(&id)?.clone();
-        Some(session)
+        let inner = map.get(&id)?.clone();
+        Some(Self { inner })
     }
 
     /// 视频原始宽高比（没打开 / 没有视频轨时为 `None`）。控件用它算内接矩形。
     pub(crate) fn video_aspect(&self) -> Option<f32> {
-        let (width, height) = self.frames.video_size()?;
+        let (width, height) = self.inner.frames.video_size()?;
         (width > 0 && height > 0).then(|| width as f32 / height as f32)
     }
 
     /// **渲染层每帧调这个**，请求一帧（非阻塞，60Hz 也只会让引擎处理一次）。
     pub fn request_frame(&self, request: FrameRequest) {
-        let Some(inner) = self.owner.upgrade() else {
-            return;
-        };
         {
-            let mut frame = self.request.frame();
+            let mut frame = self.inner.request.frame();
             *frame = request;
         }
-        if !self.request.want_frame.swap(true, Ordering::AcqRel) {
-            let _ = inner
-                .engine
+        if !self.inner.request.want_frame.swap(true, Ordering::AcqRel) {
+            let _ = self
+                .inner
                 .handle
                 .send_cmd(ErikaCmd::Render(RenderCmd::Wake));
         }
@@ -363,11 +354,8 @@ impl ViewSource {
     ///
     /// 只在**第一次**调用有意义（引擎那边一次性置上），但重复调用无害。
     pub(crate) fn report_video_unavailable(&self, reason: String) {
-        let Some(inner) = self.owner.upgrade() else {
-            return;
-        };
-        let _ = inner
-            .engine
+        let _ = self
+            .inner
             .handle
             .send_cmd(ErikaCmd::VideoUnavailable(reason));
     }
@@ -389,7 +377,7 @@ impl ViewSource {
 
     /// 现在有没有画面可画（**零成本、非阻塞**）。
     pub fn has_frame(&self) -> bool {
-        self.frames.has_frame()
+        self.inner.frames.has_frame()
     }
 
     /// 一次拿到「代号 + 帧」。代号没变 = 没有新帧。
@@ -397,35 +385,38 @@ impl ViewSource {
     /// 渲染层每帧调它（`erika.video` 控件的 `FrameBinder`），出帧测试也用它 ——
     /// 这是 `FrameSlot` 唯一的读口，控件以外没人能验证"像素真的出来了"。
     pub fn frame_snapshot(&self) -> (u64, Option<Arc<FrameImage>>) {
-        self.frames.current()
+        self.inner.frames.current()
     }
 }
 
 impl PartialEq for ViewSource {
     fn eq(&self, o: &Self) -> bool {
-        Weak::ptr_eq(&self.owner, &o.owner)
+        Arc::ptr_eq(&self.inner, &o.inner)
     }
 }
 impl Eq for ViewSource {}
 
-pub(crate) fn register(inner: &Arc<PlayerInner>) {
+pub(crate) fn register(inner: Arc<PlayerInner>) {
     REGISTRY
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .insert(
-            inner.id,
-            ViewSource {
-                frames: inner.frames.clone(),
-                request: inner.request.clone(),
-                owner: Arc::downgrade(inner),
-            },
-        );
+        .insert(inner.id, inner);
 }
+
+/// 按号把会话升起来（`Weak` 已不再使用：表里存的就是 `Arc`）。
+///
+/// 号无效 / 已经被摘表时返回 `None` —— 这是 [`ErikaPlayer::resolve`](crate::ErikaPlayer)
+/// 和 [`ErikaSlot::player`](crate::ErikaSlot) 的唯一查找点。
+pub(crate) fn owner_of(id: u64) -> Option<Arc<PlayerInner>> {
+    let map = REGISTRY.get()?.lock().ok()?;
+    map.get(&id).cloned()
+}
+
 pub(crate) fn unregister(id: u64) {
-    if let Some(map) = REGISTRY.get() {
-        if let Ok(mut map) = map.lock() {
-            map.remove(&id);
-        }
-    }
+    // 拿到锁外再析构：万一它是最后一个，PlayerInner::drop 会再进这张表。
+    let removed = REGISTRY
+        .get()
+        .and_then(|map| map.lock().ok().and_then(|mut map| map.remove(&id)));
+    drop(removed);
 }
