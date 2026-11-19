@@ -11,7 +11,7 @@
 ```sh
 cd nsh_erika/examples/nsh_erika_demo
 
-NSH_ERIKA_SRC=/path/to/video.mkv nsh run     # 或：nsh run nsh_erika/examples/nsh_erika_demo
+TEST_VIDEO=/path/to/video.mkv nsh run     # 或：nsh run nsh_erika/examples/nsh_erika_demo
 cargo run                                    # 不经 nsh 的宿主，直接跑原生后端
 ```
 
@@ -23,9 +23,9 @@ cargo run                                    # 不经 nsh 的宿主，直接跑�
 ## 环境变量
 
 | 变量 | 作用 | 默认 |
-|---|---|---|
-| `NSH_ERIKA_SRC` | 片源路径 | `../../media/tiny.mkv` |
-| `DMK` | 弹幕轨道（bilibili/json/…）；**`off` = 不挂弹幕** | `../../media/danmaku.json` |
+| --- | --- | --- |
+| `TEST_VIDEO` | 片源路径 | `../../media/tiny.mkv` |
+| `TEST_DANMAKU` | 弹幕轨道（bilibili/json/…）；**`off` = 不挂弹幕** | `../../media/danmaku.json` |
 | `NSH_ERIKA_TRACE=1` | 打 `engine tick` / `tick ≈ paint ≈ frames` 探针 | 关 |
 | `NSH_PLAYER_BUILTIN=1` | 换成 NSH 内置 `<video>`（GStreamer）**做性能对照** | 关 |
 | `RUST_LOG=nsh_erika=info` | 控件的启动/出帧日志 | 关 |
@@ -36,7 +36,7 @@ cargo run                                    # 不经 nsh 的宿主，直接跑�
 ## 两个注册入口
 
 | 路径 | 入口 |
-|---|---|
+| --- | --- |
 | `nsh run` | `src/lib.rs` 里的 `#[native_components(linux)]` / `#[native_components(windows)]` |
 | `cargo run` | `src/main.rs` 里的 `nsh_erika::register(&options.components)` |
 
@@ -45,7 +45,7 @@ cargo run                                    # 不经 nsh 的宿主，直接跑�
 ## 控制条
 
 | 按钮 | 调用 | 顺便验的东西 |
-|---|---|---|
+| --- | --- | --- |
 | 播放 / 暂停 | `play()` / `pause()` | 暂停→播放的过渡 |
 | -10s / +10s | `seek(position() ± 10s)` | **暂停时 seek 能不能刷新** |
 | 音量 - / + | `set_volume(± 0.1)` | 音频输出 |
@@ -58,8 +58,8 @@ cargo run                                    # 不经 nsh 的宿主，直接跑�
 ## 量性能
 
 ```sh
-./measure.sh                                     # 用 NSH_ERIKA_SRC 指的片源
-DMK=off ./measure.sh                             # 无弹幕对照组
+./measure.sh                                     # 用 VIDEO 指的片源
+TEST_DANMAKU=off ./measure.sh                             # 无弹幕对照组
 MEASURE_PID=$(pgrep -f nsh-app-erika-demo) ./measure.sh   # 量已在跑的进程
 ```
 

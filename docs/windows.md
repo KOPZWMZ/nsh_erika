@@ -11,7 +11,7 @@
 ## 1. 工具链
 
 | 需要 | 为什么 | 怎么装 |
-|---|---|---|
+| --- | --- | --- |
 | **Rust 1.92+（MSVC 目标）** | erika 的 `rust-version`；`x86_64-pc-windows-msvc` | rustup 默认即可 |
 | **Visual Studio Build Tools（C++ 桌面开发）** | erika 编 C 桥（`cc`）+ FFmpeg 的 MSVC 构建 | VS Installer 勾"使用 C++ 的桌面开发" |
 | **CMake** | FFmpeg / dav1d / 字体库的构建 | `winget install Kitware.CMake` 或 choco/scoop |
@@ -54,7 +54,7 @@ third_party/dist/x86_64-pc-windows-msvc/lgpl/
 所以你**什么都不用配**。想放到别处就用环境变量指过去：
 
 | 变量 | 覆盖 |
-|---|---|
+| --- | --- |
 | `ERIKA_LIBASS_DIR` | 补丁版 libass |
 | `ERIKA_FFMPEG_DIR` | FFmpeg 8 |
 | `ERIKA_FREETYPE_DIR` / `ERIKA_HARFBUZZ_DIR` / `ERIKA_FRIBIDI_DIR` | 字体库 |
@@ -71,7 +71,7 @@ third_party/dist/x86_64-pc-windows-msvc/lgpl/
 ### 和 Linux 的对照（Windows 上都不用管）
 
 | Linux 需要 | Windows 对应 |
-|---|---|
+| --- | --- |
 | 系统 FFmpeg 8 + pkg-config | vendored FFmpeg（xtask） |
 | **补丁版 libass**（脚本 + meson） | vendored libass（xtask） |
 | **补丁 wgpu-hal**（VA-API 直通） | **不需要** —— 那个补丁只为 Linux 的 Vulkan 直通导入 |
@@ -92,8 +92,8 @@ cargo run -p nsh-app-erika-demo
 示例的环境变量：
 
 ```powershell
-$env:NSH_ERIKA_SRC   = "D:\media\video.mkv"
-$env:DMK             = "D:\media\danmaku.json"   # 或者 "off" 不挂弹幕
+$env:TEST_VIDEO   = "D:\media\video.mkv"
+$env:TEST_DANMAKU             = "D:\media\danmaku.json"   # 或者 "off" 不挂弹幕
 $env:NSH_ERIKA_TRACE = "1"
 $env:RUST_LOG        = "info"
 cargo run -p nsh-app-erika-demo
@@ -112,7 +112,7 @@ cargo run -p nsh-app-erika-demo
 ## 4. 验证清单
 
 | # | 看什么 | 期望 |
-|---|---|---|
+| --- | --- | --- |
 | 1 | **硬解** | `{"event":"video_decoder_changed","activeBackend":"d3d11va","requestedBackend":"d3d11va"}` |
 | 2 | **出图面挂上** | `erika.video: attach 出图面 1920x1080 scale=1`（resize 时是 `resize`） |
 | 3 | **出帧节奏**（`NSH_ERIKA_TRACE=1`） | `tick ≈ paint ≈ frames`：无弹幕 ≈ 片源帧率，有弹幕 ≈ 60/s |
@@ -129,7 +129,7 @@ cargo run -p nsh-app-erika-demo
 ## 5. 已知限制
 
 | 限制 | 说明 |
-|---|---|
+| --- | --- |
 | **每帧一次 `CopyResource` + 一次 GPU 同步等待** | 上游为了交出一张"不可变、GPU 完成态"的快照。1080p 无感；4K 高帧率是成本大头 |
 | **输出钉死 SDR** | HDR 片源会被 tone-map 到 SDR |
 | 每帧新建纹理 + 每帧 `OpenSharedResource` | 分配器压力，靠上游池化解决 |
@@ -141,7 +141,7 @@ cargo run -p nsh-app-erika-demo
 ## 6. 排查
 
 | 现象 | 可能原因 | 处理 |
-|---|---|---|
+| --- | --- | --- |
 | 完全没日志 | GUI 子系统吞了 stdout；或 `env_logger` 只有 error | 注释掉 `windows_subsystem` 那行；`RUST_LOG=info` |
 | 黑屏，`frames` 不涨 | 渲染器后端选错（wgpu 会把外部纹理拒掉，并让硬解降级成软解） | 看启动日志的 `activeBackend`：应该是 `d3d11va`，不是 `software` |
 | 只有第一帧，之后冻住 | 控件不再重绘（"推/拉"接错了） | 看 `tick` 是否停在 1：应该是"引擎发布 → 叫醒控件" |

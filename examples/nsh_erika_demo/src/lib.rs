@@ -8,8 +8,8 @@
 //! 还是"控件没贴图"，手动按几下最快。片源从环境变量读，方便不改代码就换文件：
 //!
 //! ```sh
-//! NSH_ERIKA_SRC=/path/to/video.mkv DMK=/path/to/danmaku.json nsh run
-//! DMK=off NSH_ERIKA_SRC=/path/to/video.mkv nsh run   # 不挂弹幕（量性能的对照组）
+//! TEST_VIDEO=/path/to/video.mkv TEST_DANMAKU=/path/to/danmaku.json nsh run
+//! TEST_DANMAKU=off TEST_VIDEO=/path/to/video.mkv nsh run   # 不挂弹幕（量性能的对照组）
 //! ```
 //!
 //! `NSH_PLAYER_BUILTIN=1` 时换成 NSH 自带的 `<video>`（底层 GStreamer），**用来做
@@ -19,9 +19,9 @@
 use std::time::Duration;
 
 use nsh_base::{button, theme};
+
 use nsh_core::prelude::*;
 use nsh_erika::{PlatformComponents, PlayerState, events::ErikaEvent};
-
 /// The app's UI set (`nsh.json` `"rust"`): what a TSX entry may import from
 /// `nsh_erika_demo/native`.
 #[native_module("nsh_erika_demo/native")]
@@ -48,9 +48,9 @@ fn register_components_window(components: &PlatformComponents) {
 #[component]
 pub fn App() -> impl IntoElement {
     let builtin = std::env::var_os("NSH_PLAYER_BUILTIN").is_some();
-    let src = std::env::var("NSH_ERIKA_SRC").unwrap_or_else(|_| "../../media/tiny.mkv".to_string());
+    let src = std::env::var("TEST_VIDEO").unwrap_or_else(|_| "../../media/tiny.mkv".to_string());
     let danmaku_uri =
-        std::env::var("DMK").unwrap_or_else(|_| "../../media/danmaku.json".to_string());
+        std::env::var("TEST_DANMAKU").unwrap_or_else(|_| "../../media/danmaku.json".to_string());
     let paused = signal(false);
 
     let root = view().flex_col().flex_1().bg(move || theme().background);
@@ -65,7 +65,7 @@ pub fn App() -> impl IntoElement {
 
     // 1) 外部创建句柄（立刻返回；此时还没有媒体）
     if src.is_empty() {
-        return root.child(text("没有片源：设 NSH_ERIKA_SRC").flex_1());
+        return root.child(text("没有片源：设 VIDEO").flex_1());
     }
     let player = match nsh_erika::ErikaPlayer::new() {
         Ok(player) => player,
@@ -142,7 +142,7 @@ pub fn App() -> impl IntoElement {
     // 3) 打开 + 起播（命令进队列，立刻返回）
     player.open(nsh_erika::MediaRequest::new(src.clone()));
     player.play();
-    // `DMK=off` 时不挂弹幕：量 CPU/GPU 时要一个"没有弹幕"的对照组。
+    // `DANMAKU=off` 时不挂弹幕：量 CPU/GPU 时要一个"没有弹幕"的对照组。
     if danmaku_uri != "off" && !danmaku_uri.is_empty() {
         player.danmaku().add_track(danmaku_uri, "bilibili");
     }

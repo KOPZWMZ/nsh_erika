@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 量 player 示例跑起来之后的 CPU / GPU 占用。
 #
-#   ./measure.sh                          # 环境变量 NSH_ERIKA_SRC 就是片源
-#   NSH_ERIKA_SRC=/path/to.mkv ./measure.sh
+#   ./measure.sh                          # 环境变量 TEST_VIDEO 就是片源
+#   TEST_VIDEO=/path/to.mkv ./measure.sh
 #   SECONDS_TO_RUN=20 WARMUP=8 ./measure.sh
 #
 # 也可以量一个**已经在跑的**进程（不改它的代码、不用重新启动）：

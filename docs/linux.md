@@ -37,7 +37,7 @@ sudo apt install build-essential pkg-config meson ninja-build patch curl \
 说明：
 
 | 库 | 谁要 | 没有会怎样 |
-|---|---|---|
+| --- | --- | --- |
 | `gtk4` | NSH 的 Linux 后端（宿主） | 编译期就找不到 |
 | Vulkan loader + headers | erika 的 wgpu/Vulkan 直通 | `Linux GPU interop requires Vulkan development headers` |
 | `libpulse` | erika 的音频输出 | `Linux audio requires libpulse development files` |
@@ -52,7 +52,7 @@ sudo apt install build-essential pkg-config meson ninja-build patch curl \
 erika v0.3.7 在 Linux 上有两样东西**上游没发给外部消费者**，必须自己备：
 
 | 前置 | 为什么必须 | 怎么备 |
-|---|---|---|
+| --- | --- | --- |
 | **补丁版 `wgpu-hal`** | erika 的 Vulkan 直接导入要用 `Texture::set_external_initial_usage`（只在 liberika 仓内的 `third_party/wgpu-hal` 里，29.0.3 + `initial_usage`） | 自己根 `Cargo.toml` 里写 `[patch.crates-io]`（**下面 §2.1**） |
 | **补丁版 `libass` 0.17.5** | 加了"有序内存字体回退"；**系统 libass 不能替代** | 跑 upstream 的 `scripts/build_linux_libass.sh`（**下面 §2.2**，脚本一键） |
 
@@ -158,8 +158,8 @@ cargo run -p nsh-app-erika-demo    # 从仓库根跑示例
 
 ```sh
 cd examples/nsh_erika_demo
-NSH_ERIKA_SRC=/path/to/video.mkv DMK=/path/to/danmaku.json nsh run
-DMK=off NSH_ERIKA_SRC=/path/to/video.mkv nsh run      # 不挂弹幕（量性能的对照组）
+TEST_VIDEO=/path/to/video.mkv TEST_DANMAKU=/path/to/danmaku.json nsh run
+TEST_DANMAKU=off TEST_VIDEO=/path/to/video.mkv nsh run      # 不挂弹幕（量性能的对照组）
 ```
 
 （`nsh` 必须在有 `nsh.json` 的目录里跑；`cargo run` 走 `main.rs` 那条路径，两者需要各自注册一次
@@ -203,7 +203,7 @@ bash scripts/test-integration.sh --keep-going
 ## 5. 已知限制
 
 | 限制 | 说明 |
-|---|---|
+| --- | --- |
 | 需要两个补丁前置 | 见 §2，一步脚本；升级 erika 要重跑 |
 | 只能"拉"模式 | GTK4 没有 per-widget 原生窗口，Wayland 也不允许外来 subsurface，所以注入/直通两条路都不可行 |
 | 弹幕与视频同纹理 | 出帧频率 = max(视频帧率, 弹幕平滑度)：有弹幕时 30fps 片源也会按 60Hz 合成 |
@@ -212,7 +212,7 @@ bash scripts/test-integration.sh --keep-going
 ## 6. 常见报错
 
 | 报错 | 原因 / 处理 |
-|---|---|
+| --- | --- |
 | `Patched Linux libass is missing at … Run bash scripts/build_linux_libass.sh first` | 没备前置 → 跑 `scripts/prepare-linux-deps.sh` |
 | `Linux audio requires libpulse development files` | 缺 `libpulse-dev` / `libpulse` |
 | `Linux GPU interop requires Vulkan development headers` | 缺 `vulkan-headers` / `libvulkan-dev` |

@@ -106,13 +106,13 @@ view()
 
 ```sh
 cd examples/nsh_erika_demo
-NSH_ERIKA_SRC=/path/to/video.mkv nsh run     # 或：cargo run
+TEST_VIDEO=/path/to/video.mkv nsh run     # 或：cargo run
 ```
 
 | 环境变量 | 作用 | 默认 |
 | --- | --- | --- |
-| `NSH_ERIKA_SRC` | 片源路径 | `../../media/tiny.mkv` |
-| `DMK` | 弹幕轨道；`off` = 不挂弹幕 | `../../media/danmaku.json` |
+| `TEST_VIDEO` | 片源路径 | `../../media/tiny.mkv` |
+| `TEST_DANMAKU` | 弹幕轨道；`off` = 不挂弹幕 | `../../media/danmaku.json` |
 | `NSH_ERIKA_TRACE=1` | 打 `engine tick` / `tick ≈ paint ≈ frames` 探针 | 关 |
 | `NSH_PLAYER_BUILTIN=1` | 换成 NSH 内置 `<video>`（GStreamer）**做性能对照** | 关 |
 | `RUST_LOG=nsh_erika=info` | 控件的启动/出帧日志 | 关 |
