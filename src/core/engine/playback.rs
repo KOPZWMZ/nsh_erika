@@ -73,9 +73,33 @@ impl ErikaEngine {
         if !self.presenter.player().has_open_media() {
             return;
         }
-        self.control(ctx, if playing { "play" } else { "pause" }, move |p| {
-            if playing { p.play() } else { p.pause() }
-        });
+        let result = if playing {
+            self.presenter.play()
+        } else {
+            self.presenter.pause()
+        };
+        match result {
+            Ok(()) => {}
+            // "目标状态已经满足了"不是错误：播放/暂停是幂等意图，而声明式的 prop 会把
+            // 同一个意图重复送进来（挂载时补发、外部引擎晚到时再补发、app 自己也调过）。
+            // 上游的 `play()` / `pause()` 只**返回**这个错误、不发 `Error` 事件，所以吞掉
+            // 它是安全的。判据是"目标状态已经成立"，不是"from == to"：
+            //   · play  已满足 = 状态本来就是 `Playing`
+            //   · pause 已满足 = 状态本来就不是 `Playing`（例如已经 `Stopped`）
+            Err(erika::PlayerError::InvalidStateTransition { from, .. })
+                if (playing && from == erika::PlayerState::Playing)
+                    || (!playing && from != erika::PlayerState::Playing) =>
+            {
+                log::debug!(
+                    "erika: {} 的目标状态已经成立（当前 {from:?}），忽略重复意图",
+                    if playing { "play" } else { "pause" }
+                );
+            }
+            Err(e) => self.fail(
+                ctx,
+                format!("{}: {e}", if playing { "play" } else { "pause" }),
+            ),
+        }
     }
     /// 停播。状态由 erika 自己维护:停完是 `PlayerState::Stopped`,而**媒体仍然开着**
     /// (`has_open_media()` 为 true、`duration` 还在、位置归 0)。

@@ -1,6 +1,6 @@
 # API 用法
 
-库对外的全部东西就三块：**一个句柄**（`ErikaPlayer`）、**一块显示区域**（`ErikaVideo`）、
+库对外的全部东西就三块：**一个句柄**（`ErikaPlayer`）、**一块画面**（`erika_video()`）、
 **两个附加句柄**（弹幕 / 字幕）。控件的 prop 表只有 `source`，所以控制面永远是函数调用，
 不需要命令、事件或回调链。
 
@@ -14,7 +14,7 @@ player.play();                                  // ③ 播
 view()
     .flex_col()
     .flex_1()
-    .child(nsh_erika::ErikaVideo(&player).flex_1())  // ④ 画面
+    .child(nsh_erika::erika_video().player(&player).flex_1())  // ④ 画面
     .child(/* 你自己的控制条，直接调 player */)
 ```
 
@@ -27,14 +27,14 @@ view()
 
 | 你要的东西 | 路径 |
 |---|---|
-| 播放器 / 画面 / 注册 / 控件名 | `nsh_erika::{ErikaPlayer, ErikaVideo, register, COMPONENT_NAME, PlatformComponents}` |
+| 播放器 / 画面 / 注册 / 控件名 | `nsh_erika::{ErikaPlayer, erika_video, register, COMPONENT_NAME, PlatformComponents}` |
 | 打开媒体的请求、播放状态 | `nsh_erika::{MediaRequest, PlayerState}`（高频，特意留在根上） |
 | 弹幕：句柄 + 快照 + 五组样式 | `nsh_erika::danmaku::*` |
 | 字幕：句柄 + 快照 + 外观 / 版面 / 延迟 | `nsh_erika::subtitle::*` |
 | 轨道：列表 / 选择 / 外挂字幕 | `nsh_erika::tracks::*` |
 | 状态快照 `ErikaStatus` / `ErikaProgress` | `nsh_erika::state::*` |
 | 事件 `ErikaEvent` + 三个 Listener | `nsh_erika::events::*` |
-| 帧源（只有自写控件才用） | `nsh_erika::video::*` ← **需要 `escape-hatch` feature** |
+| 会话 / 帧（只有自写控件才用） | `nsh_erika::video::*` ← **需要 `escape-hatch` feature** |
 | **其它一切上游类型** | `nsh_erika::erika::…`（全量兜底） |
 
 ⚠️ 上游类型**只从 `nsh_erika::erika` 拿**，别在 `Cargo.toml` 里再直接依赖 liberika：
@@ -56,17 +56,17 @@ nsh-erika = { path = "…", features = ["escape-hatch"] }
 
 | 打开后多出什么 | 用来干什么 |
 |---|---|
-| `video::{ErikaVideoSource, FrameImage, FrameRequest}`（外加平台的 `DmabufFrame` / `SharedTexture`） | 自己写平台控件、或做出帧自检（`request_frame` + `frame_snapshot`）|
-| `ErikaPlayer::video_source()` | 拿帧源句柄 —— 上面那些类型的唯一入口 |
+| `video::{ErikaSession, FrameImage, FrameRequest}`（外加平台的 `DmabufFrame` / `SharedTexture`） | 自己写平台控件、或做出帧自检（`request_frame` + `frame_snapshot`）|
+| `ErikaPlayer::session()` | 拿会话句柄 —— 上面那些类型的唯一入口 |
 | `ErikaPlayer::call()` / `call_with()` | 在引擎线程上跑 presenter 独有能力：超分 / HDR / 截图 / HUD，以及还没封装的上游 getter |
 | `ErikaPlayer::raw()` | 裸 `erika::Player`。⚠️ 它的**写方法全部绕过 presenter 的音频协调**（实测：直连 `set_playback_rate` 画面变快声音不变）—— 只用来读 |
 | `danmaku::ErikaDanmaku::update_config()` / `danmaku::DanmakuLayoutConfig` | 上游**整包**样式的写侧（24 字段）。未成组的字段（`scroll_duration_seconds` / `custom_font_face_index` …）只能走它；日常改样式用五组类型化视图。**读**整包也走逃生舱：`player.call_with(\|p\| p.danmaku_config().cloned())` —— 快照里不再放第二份 |
 
 约定：**逃生舱里的东西不进日常路径**。关掉 feature 时它们不是"消失了"，而是"不推荐、
-不承诺"：上游类型照样能从 `nsh_erika::erika::…` 摸到，我们自己的那几个（`ErikaVideoSource`
+不承诺"：上游类型照样能从 `nsh_erika::erika::…` 摸到，我们自己的那几个（`ErikaSession`
 等）才真的不导出。
 
-对 99% 的应用来说，正确的做法一直是 `ErikaVideo(&player)` —— 那条路不需要这个 feature。
+对 99% 的应用来说，正确的做法一直是 `erika_video().player(&player)` —— 那条路不需要这个 feature。
 
 ---
 
@@ -78,7 +78,7 @@ nsh-erika = { path = "…", features = ["escape-hatch"] }
 | `danmaku::ErikaDanmaku` | `player.danmaku()` | 弹幕开关、轨道、样式、偏移 |
 | `subtitle::ErikaSubtitle` | `player.subtitle()` | 字幕样式、位置、延迟 |
 | `tracks::ErikaTracks` | `player.tracks()` | 轨道列表与选择、外挂字幕 |
-| `video::ErikaVideoSource` | `player.video_source()` | **逃**：帧槽 + `request_frame`。一般不用，直接写 `ErikaVideo(&player)` |
+| `video::ErikaSession` | `player.session()` | **逃**：会话（帧槽 + `request_frame` + 基础控制）。一般不用，直接写 `erika_video().player(&player)` |
 
 `ErikaPlayer` 很便宜可以随便 clone：`Clone` = 两次引用计数加一；`PartialEq` 按身份
 （`Arc::ptr_eq`）比较，所以能直接塞 `signal()`（信号是 `Copy`，闭包捕获它就不用每个闭包
@@ -114,7 +114,7 @@ fn components_windows(components: &PlatformComponents) { nsh_erika::register(com
 ## 显示
 
 ```rust
-nsh_erika::ErikaVideo(&player)        // 或 player.clone()（参数是 impl Borrow<ErikaPlayer>）
+nsh_erika::erika_video().player(&player)   // 或 player.clone()（参数是 impl Borrow<ErikaPlayer>）
     .flex_1()                          // 返回的是普通 NSH 元素，样式照常链式调用
 ```
 
@@ -122,7 +122,7 @@ nsh_erika::ErikaVideo(&player)        // 或 player.clone()（参数是 impl Bor
 手写也可以（一般不需要）：
 
 ```rust
-native(nsh_erika::COMPONENT_NAME).prop("source", player.video_source().id())
+native(nsh_erika::COMPONENT_NAME).prop("source", player.session().id())
 ```
 
 **画面比例**：控件按视频宽高比内接并居中，多出来的留黑（等价 `ContentFit::Contain`）。
@@ -280,9 +280,9 @@ player.tracks().remove_subtitle(track_id);
 |---|---|---|
 | **页面级（会话级）** | `ErikaPlayer` + 引擎线程 + GPU 设备 + 音频输出 + 解码线程 + libass | 你 `new()` 时建；**最后一个句柄 drop 时全收** |
 | 媒体级 | demux / 解码 / preroll | `open()` 起；`stop()` 保持打开；换片重建 |
-| 进程级 | 帧源注册表（空表时什么都不留） | 应用期 |
+| 进程级 | 会话注册表（空表时什么都不留） | 应用期 |
 
-- **"最后一个句柄"包括控件持有的帧源**（`video::ErikaVideoSource`）。所以删掉控件 ≠ 引擎退出，
+- **"最后一个句柄"指 app 的 `ErikaPlayer`**（每个句柄一张"座位"）。视图自己持着会话，所以删掉控件 ≠ 引擎退出，
   句柄 `drop` 才是。
 - 想在退出进程前**确定地**收干净：`player.shutdown()` —— 它会等引擎线程把 `PresenterRuntime`
   （GPU 设备 / 解码器 / libass / 字体库）析构完（最多 5 秒，超时打 warn 放弃）。不调也行，

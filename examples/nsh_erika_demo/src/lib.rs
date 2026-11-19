@@ -200,48 +200,49 @@ pub fn App() -> impl IntoElement {
     };
 
     // 4) 页面只放"显示"；控制条是普通的 NSH 元素，直接调句柄
-    root.child(nsh_erika::ErikaVideo(&player).flex_1()).child(
-        view()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .gap_4()
-            .px(px(12.0))
-            .py(px(8.0))
-            .bg(move || theme().card)
-            .child(tap(
-                move || if playing.get() { "暂停" } else { "播放" }.to_string(),
-                toggle,
-            ))
-            .child(tap(|| "-10s".to_string(), back))
-            .child(tap(|| "+10s".to_string(), forward))
-            .child(tap(|| "音量 -".to_string(), quieter))
-            .child(tap(|| "音量 +".to_string(), louder))
-            .child(tap(
-                move || {
-                    if muted.get() {
-                        "取消静音"
-                    } else {
-                        "静音"
-                    }
-                    .to_string()
-                },
-                mute,
-            ))
-            .child(tap(|| "停止".to_string(), stop))
-            .child(
-                text(move || {
-                    status_line(
-                        position.get(),
-                        duration.get(),
-                        volume.get(),
-                        muted.get(),
-                        error.get(),
-                    )
-                })
-                .text_color(move || theme().muted_foreground),
-            ),
-    )
+    root.child(nsh_erika::erika_video().player(&player).flex_1())
+        .child(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap_4()
+                .px(px(12.0))
+                .py(px(8.0))
+                .bg(move || theme().card)
+                .child(tap(
+                    move || if playing.get() { "暂停" } else { "播放" }.to_string(),
+                    toggle,
+                ))
+                .child(tap(|| "-10s".to_string(), back))
+                .child(tap(|| "+10s".to_string(), forward))
+                .child(tap(|| "音量 -".to_string(), quieter))
+                .child(tap(|| "音量 +".to_string(), louder))
+                .child(tap(
+                    move || {
+                        if muted.get() {
+                            "取消静音"
+                        } else {
+                            "静音"
+                        }
+                        .to_string()
+                    },
+                    mute,
+                ))
+                .child(tap(|| "停止".to_string(), stop))
+                .child(
+                    text(move || {
+                        status_line(
+                            position.get(),
+                            duration.get(),
+                            volume.get(),
+                            muted.get(),
+                            error.get(),
+                        )
+                    })
+                    .text_color(move || theme().muted_foreground),
+                ),
+        )
 }
 
 /// 控制条上的一个按钮（示例用的最小样式：不做 `ui` 层，只取主题里的两三个 token）。

@@ -6,6 +6,38 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)：每版分「新增 / 变更
 （破坏性）/ 修复 / 文档」几节，破坏性的写在最显眼的位置。
 
+## [未发布]
+
+声明式控制：画面从"只能拿句柄调方法"变成"一块带 props 的元素"。组件自己会建引擎，
+控制项在组件层就被翻译成引擎命令（不过 JSON），原生控件只剩"画"。
+
+### 变更（破坏性）
+
+- **`ErikaVideoSource` → `ErikaSession`**（`escape-hatch` 下导出）：它现在是一个**会话**
+  ——一个引擎 + 一条画面通道 + 一个身份 + 一份寿命，不只是"帧源"。
+  `ErikaPlayer::video_source()` 一并改名 `ErikaPlayer::session()`。
+- **`erika.video` 的控制面移到组件层**：`paused` / `muted` / `volume` / `rate` 现在是
+  `ErikaVideo` 的 props，由组件直接发命令。平台控件只认 `source`（帧源号）——
+  以前那句"控件不自建引擎、没有控制 prop"不再成立。
+- **内部：`Slot` 并入 `ErikaSession`**，手写引用计数（`players` / `alive`）换成**座位
+  token**（`Seat`：`Clone` 多一张票、最后一张 `Drop` 时注销注册表）。`ErikaPlayer` 不再
+  实现 `Drop`。
+
+### 新增
+
+- **`nsh_erika::erika_video()`**（组件 `ErikaVideo`）：`erika_video().player(&player)` 用外部
+  引擎；`erika_video().src(uri)` 让组件自己异步建引擎（`open` 之后由 `paused` 决定播不播）。
+- **`ErikaVideo` 的 props**：`source` / `src` / `paused` / `muted` / `volume` / `rate`。
+  改一个就发**一条**命令；引擎晚到时挂载前的意图会补发一遍（`Intents::apply`）。
+- **`ErikaSession` 的控制面**（`pub(crate)`）：`play` / `pause` / `set_muted` /
+  `set_volume` / `set_rate` —— 内部自建和外部传入的引擎在这一层是同一种东西。
+
+### 修复
+
+- `Play` / `Pause` 在**没有媒体**时不再报错（对齐 `stop()` 的口径）：声明式的 `paused`
+  prop 会在 `open()` 之前到达，那不是错误。
+- 平台层 `source` 收到 `null` 时不再解绑+告警 —— 它现在表示"号还没到"。
+
 ## [0.2.0] - 2026-11-18
 
 首个**对外**发布。仓库内曾有一个内部 tag `v0.1.0`（未发布）；导出面在 0.2.0 大改，

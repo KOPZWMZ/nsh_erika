@@ -85,14 +85,14 @@ player.play();
 view()
     .flex_col()
     .flex_1()
-    .child(nsh_erika::ErikaVideo(&player).flex_1())
+    .child(nsh_erika::erika_video().player(&player).flex_1())
     .child(button().on_press({
         let player = player.clone();
         move || player.pause()
     }).child(text("暂停")))
 ```
 
-**路径**：根上只有"每个 app 都要手写"的几个（`ErikaPlayer` / `ErikaVideo` / `register` /
+**路径**：根上只有"每个 app 都要手写"的几个（`ErikaPlayer` / `erika_video` / `register` /
 `COMPONENT_NAME` / `PlatformComponents` / `MediaRequest` / `PlayerState`）；其余按关注点分模块：
 `danmaku::` `subtitle::` `tracks::` `state::` `events::` `video::`（`video` 是逃生舱，需要
 `escape-hatch` feature）。上游类型走

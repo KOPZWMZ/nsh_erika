@@ -23,7 +23,7 @@
 //! let player = ErikaPlayer::new()?;
 //! player.open(MediaRequest::new(uri));
 //! player.play();
-//! view().child(nsh_erika::ErikaVideo(&player));    // 控件只负责显示
+//! view().child(nsh_erika::erika_video().player(&player));   // 控件只负责显示
 //! ```
 //!
 //! ## 读直连,写走队列
@@ -46,7 +46,7 @@
 //! │ cmd.rs      命令词汇表:ErikaCmd 五族                                  │
 //! │ player.rs   ErikaPlayer + ErikaStatus                                │
 //! │ listener.rs 三条订阅通道的出口:ErikaStatusListener / …Listener + ErikaEvent │
-//! │ source.rs   ErikaVideoSource + FrameSlot + FrameImage（帧载荷）       │
+//! │ source.rs   ErikaSession  + FrameSlot + FrameImage（帧载荷）       │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ┌ 平台适配层 —— 唯一允许出现 gtk / D2D 的地方 ─────────────────────────┐
 //! │ linux/native_view.rs   ErikaView：`gtk::Picture` + tick 回调          │
@@ -89,7 +89,7 @@
 //! view()
 //!     .flex_col()
 //!     .flex_1()
-//!     .child(nsh_erika::ErikaVideo(&player).flex_1())
+//!     .child(nsh_erika::erika_video().player(&player).flex_1())
 //!     .child(text("控制条写在这：button().on_press(move || player.pause())"))
 //! # }
 //! ```
@@ -132,6 +132,8 @@ pub(crate) use linux as backend;
 mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
+use nsh_core::JsonValue;
+use nsh_core::prelude::*;
 #[cfg(target_os = "windows")]
 pub(crate) use windows as backend;
 
@@ -147,7 +149,7 @@ pub(crate) use windows as backend;
 //   3. **上游类型一律走 `nsh_erika::erika::…`**;只有"出现在我们公开字段 / 参数里"的
 //      才在对应模块就地再放一份 —— 让写面板的人不用在两个命名空间之间来回跳。
 //   4. **逃生舱挂到 `escape-hatch` feature 下,默认不导出**(见 `video` 模块与
-//      `ErikaPlayer::video_source`)。判据:它出现在首页就是"错误的邀请"。
+//      `ErikaPlayer::session`)。判据:它出现在首页就是"错误的邀请"。
 //
 // 想加一个导出之前先问"它属于上面哪一条"。一条都不属于 → 它大概是内部实现,不该导。
 
@@ -204,7 +206,7 @@ pub mod events {
 /// 帧源与帧载荷：**自写控件 / 出帧自检**才用，普通应用用 [`ErikaVideo`](crate::ErikaVideo)。
 #[cfg(feature = "escape-hatch")]
 pub mod video {
-    pub use crate::core::source::{ErikaVideoSource, FrameImage, FrameRequest};
+    pub use crate::core::source::{ErikaSession, FrameImage, FrameRequest};
     #[cfg(target_os = "windows")]
     pub use crate::windows::frame::SharedTexture;
     #[cfg(target_os = "linux")]
@@ -223,9 +225,11 @@ pub use ::erika::MediaRequest;
 pub use ::erika::PlayerState;
 pub use core::player::ErikaPlayer;
 
+use crate::core::source::ErikaSession;
+
 /// 原生控件名。
 ///
-/// 一般不用直接写：用 [`ErikaVideo`]（`nsh_erika::ErikaVideo(&player)`）就会带上 `source` prop。
+/// 一般不用直接写：用 [`ErikaVideo`]（`nsh_erika::erika_video().player(&player)`）就会带上 `source` prop。
 /// 手写时是 `native(nsh_erika::COMPONENT_NAME).prop("source", source.id())`。
 pub const COMPONENT_NAME: &str = "erika.video";
 
@@ -237,33 +241,178 @@ pub fn register(component: &PlatformComponents) {
     component.register(COMPONENT_NAME, backend::native_view::factory());
 }
 
-impl ErikaPlayer {
-    /// 这个播放器的画面：`view().child(player.video().flex_1())`。
+/// 画面的 props。
+///
+/// **控制类**（`paused` / `muted` / `volume` / `rate`）在组件体里被翻译成引擎命令，
+/// **不过 JSON**；只有 `source`（帧源号）和将来的 `object_fit`（贴合方式）需要过桥。
+#[derive(Debug, Clone, PartialEq, Props)]
+pub struct ErikaVideoProps {
+    /// 帧源号：`erika_video().player(&player)` 填；0 = 没有外部引擎。
+    #[prop(default)]
+    pub source: Prop<u64>,
+    /// 视频地址：没有外部引擎时由组件自己建引擎并打开它。
+    #[prop(default)]
+    pub src: Prop<String>,
+    /// 暂停中。
+    #[prop(default)]
+    pub paused: Prop<bool>,
+    /// 静音。
+    #[prop(default)]
+    pub muted: Prop<bool>,
+    /// 音量 0..1。
+    #[prop(default)]
+    pub volume: Prop<f32>,
+    /// 倍速（> 0）。
+    #[prop(default)]
+    pub rate: Prop<f64>,
+}
+
+/// 控制类 prop 的快照：`Copy`，所以能进 `spawn` 的 `'static` future。
+#[derive(Clone, Copy)]
+struct Intents {
+    paused: Prop<bool>,
+    muted: Prop<bool>,
+    volume: Prop<f32>,
+    rate: Prop<f64>,
+}
+
+impl Intents {
+    fn of(p: &ErikaVideoProps) -> Self {
+        Self {
+            paused: p.paused,
+            muted: p.muted,
+            volume: p.volume,
+            rate: p.rate,
+        }
+    }
+
+    /// 把当前意图全部下发一遍。
     ///
-    /// 和 [`ErikaVideo`] 是同一个东西，只是从播放句柄出发——一个播放器只能有一个画面源，
-    /// 所以不需要另外拿 `video::ErikaVideoSource`（那是逃生舱，要 `escape-hatch`）。返回的是普通的 NSH 元素，
-    /// `.flex_1()` / `.rounded(…)` 这些照常链式调用。
-    pub fn video(&self) -> nsh_core::prelude::NativeView {
-        view_for(self.source_id())
+    /// 引擎是**异步**建的：`paused` 这类 prop 的 effect 很可能在 `control` 还是 `None`
+    /// 时先跑一遍，什么都不发。所以拿到引擎之后必须补一次 —— 这不是保险，是必需的。
+    fn apply(self, control: Stored<Option<ErikaSession>>) {
+        let Some(source) = control.get() else { return };
+        if untracked(|| self.paused.get()) {
+            source.pause();
+        } else {
+            source.play();
+        }
+        source.set_muted(untracked(|| self.muted.get()));
+        source.set_volume(untracked(|| self.volume.get()));
+        source.set_rate(untracked(|| self.rate.get()));
     }
 }
 
-/// 一个播放器的画面：`view().child(ErikaVideo(&player).flex_1())`。
+/// 一个播放器的画面。
 ///
-/// 这是对外的**唯一**画面入口 —— 里面做了三件事，使用者都看不到：把句柄换成一个号、
-/// 生成 `native("erika.video")` 元素、把号作为 `source` prop 放上去。返回的是普通
-/// NSH 元素，`.flex_1()` / `.rounded(…)` 这些照常链式调用。
+/// **唯一的画面入口**：`erika_video().player(&player)`（外部引擎）或
+/// `erika_video().src(uri)`（组件自己建引擎）。
 ///
 /// 传 `&player` 或 `player.clone()` 都行（`Borrow`）。
-///
-/// 名字是 PascalCase 只是为了写起来像元素；NSH 自带的元素函数是 snake_case
-/// （`video()`、`text()`），两者风格上并不冲突。
-#[allow(non_snake_case)]
-pub fn ErikaVideo(player: impl std::borrow::Borrow<ErikaPlayer>) -> nsh_core::prelude::NativeView {
-    view_for(player.borrow().source_id())
-}
+#[component]
+pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
+    let external = props.source.get();
+    let source_id = signal(external);
+    // 保活：内部引擎的寿命 = 这个组件（外部模式下永远是 None）。
+    let owned = stored(Option::<ErikaPlayer>::None);
+    // 控制面：内部建的和外部传的在这里汇流成同一种东西，控制 effect 只认它。
+    let control = stored(Option::<ErikaSession>::None);
 
-/// 帧源号 → `erika.video` 元素。
-fn view_for(id: u64) -> nsh_core::prelude::NativeView {
-    nsh_core::prelude::native(COMPONENT_NAME).prop("source", nsh_core::JsonValue::from(id))
+    let intents = Intents::of(&props);
+
+    // 内部建引擎
+    if external == 0 {
+        let src = props.src.get();
+        spawn(async move {
+            if untracked(|| props.source.get()) != 0 {
+                return;
+            }
+            match blocking(ErikaPlayer::new).await {
+                Ok(Ok(player)) => {
+                    if !src.is_empty() {
+                        player.open(MediaRequest::new(src));
+                    } // 注意：不 play —— 播放与否交给 `intents.apply`
+                    let id = player.session_id();
+                    control.with(|c| *c = ErikaSession::resolve(id)); // 内部也走同一条门
+                    owned.with(|o| *o = Some(player));
+                    source_id.set(id);
+                    intents.apply(control); // 补上早到的意图
+                }
+                Ok(Err(e)) => log::error!("erika.video: 引擎起不来: {e}"),
+                Err(_) => log::error!("erika.video: 建引擎的线程挂了"),
+            }
+        });
+    }
+
+    // 外部号：挂载时跑一次（effect 立即执行），之后号变了也跑
+    effect(move || {
+        let id = props.source.get();
+        if id == 0 {
+            return;
+        }
+        control.with(|c| *c = ErikaSession::resolve(id));
+        if let Some(player) = owned.try_with(|o| o.take()).flatten() {
+            // 外部号来了：内部引擎让位（后台线程收，别在 UI 线程等 shutdown）
+            std::thread::spawn(move || player.shutdown());
+        }
+        intents.apply(control);
+    });
+
+    // 控制：只认 control；引擎还没就绪时什么都不发（就绪后由 `Intents::apply` 补）
+    effect(move || {
+        let paused = props.paused.get();
+        if let Some(source) = control.get() {
+            if paused {
+                source.pause();
+            } else {
+                source.play();
+            }
+        }
+    });
+    effect(move || {
+        let muted = props.muted.get();
+        if let Some(source) = control.get() {
+            source.set_muted(muted);
+        }
+    });
+    effect(move || {
+        let volume = props.volume.get();
+        if let Some(source) = control.get() {
+            source.set_volume(volume);
+        }
+    });
+    effect(move || {
+        let rate = props.rate.get();
+        if let Some(source) = control.get() {
+            source.set_rate(rate);
+        }
+    });
+
+    cleanup(move || {
+        if let Some(player) = owned.try_with(|o| o.take()).flatten() {
+            std::thread::spawn(move || {
+                player.shutdown();
+            });
+        }
+    });
+
+    native(COMPONENT_NAME).prop("source", move || {
+        let external = props.source.get();
+        let id = if external != 0 {
+            external
+        } else {
+            source_id.get()
+        };
+        if id == 0 {
+            JsonValue::Null
+        } else {
+            JsonValue::from(id)
+        }
+    })
+}
+impl ErikaVideoElement {
+    /// 画面绑定的播放器。
+    pub fn player(self, player: impl std::borrow::Borrow<ErikaPlayer>) -> Self {
+        self.source(player.borrow().session_id()) // 同 crate，拿得到 pub(crate)
+    }
 }

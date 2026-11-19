@@ -1,4 +1,4 @@
-//! 帧源（`ErikaVideoSource`）：**显示句柄**。
+//! 帧源（`ErikaSession`）：**显示句柄**。
 //!
 //! 它由 [`ErikaPlayer::new`](crate::ErikaPlayer::new) 与播放句柄一起交出：句柄留在外面
 //! 控制（`open` / `play` / `pause` / …），帧源交给 `erika.video` 控件显示
@@ -9,9 +9,9 @@
 //! ## 为什么是「号」而不是「引用」
 //!
 //! NSH 的组件边界只能过 JSON（`native(...).prop(name, value)`），句柄过不去。所以帧源在
-//! 构造时领一个进程内唯一的号（[`ErikaVideoSource::id`]），登记在进程级注册表里；控件
-//! 拿号就能找回它（[`ErikaVideoSource::resolve`]）。注册表持**强引用**（不能是弱引用：
-//! 页面函数返回后 `ErikaVideoSource` 这个局部值就 drop 了，而控件的 prop 要到挂载时才送到），
+//! 构造时领一个进程内唯一的号（[`ErikaSession::id`]），登记在进程级注册表里；控件
+//! 拿号就能找回它（[`ErikaSession::resolve`]）。注册表持**强引用**（不能是弱引用：
+//! 页面函数返回后 `ErikaSession` 这个局部值就 drop 了，而控件的 prop 要到挂载时才送到），
 //! 由播放句柄负责摘除 —— 最后一个 [`ErikaPlayer`](crate::ErikaPlayer) drop 时自动清掉。
 //!
 //! **每个平台一条出帧路径**：Linux 是 erika 导出的线性 dma-buf，没有 CPU 回读兜底 ——
@@ -33,10 +33,10 @@
 //! 两边的变体各自只在对应平台编译，帧槽本身没有平台分支。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
-use crate::core::cmd::{ErikaCmd, RenderCmd};
+use crate::core::cmd::{ErikaCmd, PlaybackCmd, RenderCmd, SettingsCmd};
 use crate::core::player::EngineGuard;
 
 /// 一帧的画面载荷：各平台一份变体。
@@ -261,127 +261,129 @@ impl Request {
     }
 }
 
-/// 进程级注册表：号 → 帧源。
+/// 进程级注册表：号 → 会话。
 ///
-/// **持强引用**，由播放句柄负责摘除（最后一个 [`ErikaPlayer`](crate::ErikaPlayer) drop 时）。
-/// 为什么不能是弱引用：页面函数返回后 `ErikaVideoSource` 这个局部值就 drop 了，而控件的
-/// prop 要到挂载时才送到 —— 那时弱引用早就死了（实测报 `source=1 找不到帧源`）。
-static REGISTRY: OnceLock<Mutex<HashMap<u64, Arc<Slot>>>> = OnceLock::new();
+/// **持强引用**，由最后一张"座位"摘除（最后一个 [`ErikaPlayer`](crate::ErikaPlayer) drop 时）。
+/// 为什么不能是弱引用：页面函数返回后会话这个局部值就 drop 了，而控件的 prop 要到挂载时
+/// 才送到 —— 那时弱引用早就死了（实测报 `source=1 找不到帧源`）。
+///
+/// 它是**跨 JSON 边界的唯一桥**：组件层（能拿到播放器）和平台层（能画帧）是两个对象，
+/// 只能靠一个号互相对上。外面看不到这张表，只看得到 [`ErikaSession::resolve`]。
+static REGISTRY: OnceLock<Mutex<HashMap<u64, ErikaSession>>> = OnceLock::new();
 /// 下一个要发的号。1 起，0 留作"没有"。
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// 帧源的共享部分：一条引擎命令通道 + 一格帧槽 + 一个出帧请求。
-pub(crate) struct Slot {
+/// 一个 app 播放句柄的"座位"。
+///
+/// 只有 [`ErikaPlayer`](crate::ErikaPlayer) 持有它：`Clone` 多一张票，`Drop` 还一张。
+/// **最后一张座位掉下来时**顺手把注册表里那一条摘掉 —— 这就是"注销"的全部实现：
+/// 没有计数器、没有标志位，也不会忘记调。
+pub(crate) struct Seat {
     id: u64,
-    /// 还活着的播放句柄数（[`ErikaPlayer`](crate::ErikaPlayer) 的 clone / drop 维护）。
-    players: AtomicUsize,
-    /// 播放句柄全部 drop 之后置 `false`：控件下一帧自己停。
-    alive: AtomicBool,
-    pub(crate) engine: Arc<EngineGuard>,
-    frames: Arc<FrameSlot>,
-    request: Arc<Request>,
 }
 
-impl Slot {
-    /// 它的号（控件绑定显示目标用）。
-    pub(crate) fn id(&self) -> u64 {
-        self.id
+impl Drop for Seat {
+    fn drop(&mut self) {
+        if let Some(map) = REGISTRY.get() {
+            if let Ok(mut map) = map.lock() {
+                map.remove(&self.id);
+            }
+        }
+        log::debug!("erika.video: 会话 #{} 摘除（播放句柄已全部 drop）", self.id);
     }
+}
 
+/// 一个播放会话：**一个引擎 + 一条画面通道 + 一个身份 + 一份寿命**。
+///
+/// 两个门共用它：
+///
+/// - app 的 [`ErikaPlayer`](crate::ErikaPlayer)：直读 `erika::Player`、发控制命令、**持座位**；
+/// - 平台控件（Linux `ErikaView` / `FrameBinder`、Windows 的 `draw`）：每帧
+///   [`request_frame`](Self::request_frame) + [`frame_snapshot`](Self::frame_snapshot)，
+///   靠 [`is_alive`](Self::is_alive) 决定还要不要出帧。
+///
+/// `Clone` 只是三次引用计数加一，可以随便被闭包捕获；`PartialEq` 比号（号单调递增、
+/// 永不复用，所以精确）。
+///
+/// 会话自己**不干活**：不渲染、不解码、不播放。它只是把上面四样东西绑在一起并给一个号。
+#[derive(Clone)]
+pub struct ErikaSession {
+    /// 身份（控件绑定显示目标 / 注册表键）。0 留给"没有"。
+    id: u64,
+    /// 引擎 + 唯一的命令队列。它的 `Drop` 才是"关引擎"。
+    pub(crate) engine: Arc<EngineGuard>,
+    /// 帧邮箱：引擎写、控件每帧读。
+    frames: Arc<FrameSlot>,
+    /// 出帧请求：控件写尺寸 / DPI，引擎读。
+    request: Arc<Request>,
+    /// 还有没有 app 播放句柄（`None` = 最后一张座位已经 drop）。
+    seat: Weak<Seat>,
+}
+
+impl ErikaSession {
+    /// 起一个新会话：领号、建座位、登记注册表。
+    ///
+    /// 返回的 `Arc<Seat>` 交给 [`ErikaPlayer`](crate::ErikaPlayer) —— **票只有它产**：
+    /// 没有座位就没有"app 还在控制"这回事，控件会立刻停帧。
     pub(crate) fn new(
         engine: Arc<EngineGuard>,
         frames: Arc<FrameSlot>,
         request: Arc<Request>,
-    ) -> Arc<Self> {
+    ) -> (Self, Arc<Seat>) {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let slot = Arc::new(Self {
+        let seat = Arc::new(Seat { id });
+        let session = Self {
             id,
-            players: AtomicUsize::new(1),
-            alive: AtomicBool::new(true),
             engine,
             frames,
             request,
-        });
+            seat: Arc::downgrade(&seat),
+        };
         REGISTRY
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(id, slot.clone());
-        log::debug!("erika.video: 帧源 #{id} 登记");
-        slot
+            .insert(id, session.clone());
+        log::debug!("erika.video: 会话 #{id} 登记");
+        (session, seat)
     }
 
-    /// 又克隆出一个播放句柄。
-    pub(crate) fn player_cloned(&self) {
-        self.players.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// 少一个播放句柄；最后一个走人时摘掉注册表里的这一条。
-    pub(crate) fn player_dropped(&self) {
-        if self.players.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.alive.store(false, Ordering::Release);
-            if let Some(map) = REGISTRY.get() {
-                if let Ok(mut map) = map.lock() {
-                    map.remove(&self.id);
-                }
-            }
-            log::debug!("erika.video: 帧源 #{} 摘除（播放句柄已全部 drop）", self.id);
-        }
-    }
-}
-/// 显示句柄：交给 `erika.video` 控件的东西。
-///
-/// 由 [`ErikaPlayer::new`](crate::ErikaPlayer::new) 一起交出；`Clone` 只是 Arc 加一，
-/// 可以随便被 UI 闭包捕获。**控制能力不在这里** —— 播放/暂停/选轨都在
-/// [`ErikaPlayer`](crate::ErikaPlayer) 上。
-#[derive(Clone)]
-pub struct ErikaVideoSource {
-    slot: Arc<Slot>,
-}
-
-impl ErikaVideoSource {
-    /// 只有逃生舱（`ErikaPlayer::video_source`）用它 —— 关掉 feature 时就没人构造了。
-    #[cfg(feature = "escape-hatch")]
-    pub(crate) fn new(slot: Arc<Slot>) -> Self {
-        Self { slot }
-    }
-
-    /// 这个帧源的号：控件用它绑定显示目标（`ErikaVideo` 内部就是这个）。
+    /// 它的号（控件绑定显示目标用：`native(COMPONENT_NAME).prop("source", id)`）。
     ///
-    /// 只有**自己手写控件**时才用得上（离屏渲染 / 自建原生视图）：
-    /// `native(COMPONENT_NAME).prop("source", source.id())`。
-    #[cfg(feature = "escape-hatch")]
+    /// 只有**自己手写控件**时才用得上（离屏渲染 / 自建原生视图）。
     pub fn id(&self) -> u64 {
-        self.slot.id
+        self.id
     }
 
-    /// 播放句柄还在不在（全部 drop 之后控件该收工了）。
+    /// 还有没有 app 播放句柄（全部 drop 之后控件该收工了）。
+    ///
+    /// 注意它不等于"引擎还活着"：视图自己持着会话，所以引擎通常比它晚走一步 ——
+    /// 这里是"还有没有人控制我"，不是"还有没有引擎"。
     pub(crate) fn is_alive(&self) -> bool {
-        self.slot.alive.load(Ordering::Acquire)
+        self.seat.strong_count() > 0
     }
 
-    /// 按号找回帧源。控件专用：号无效（从没存在过 / 播放句柄已经 drop）时返回 `None`。
+    /// 按号找回会话。控件专用：号无效（从没存在过 / 播放句柄已经 drop）时返回 `None`。
     pub(crate) fn resolve(id: u64) -> Option<Self> {
         let map = REGISTRY.get()?.lock().ok()?;
-        let slot = map.get(&id)?.clone();
-        Some(Self { slot })
+        let session = map.get(&id)?.clone();
+        Some(session)
     }
 
     /// 视频原始宽高比（没打开 / 没有视频轨时为 `None`）。控件用它算内接矩形。
     pub(crate) fn video_aspect(&self) -> Option<f32> {
-        let (width, height) = self.slot.frames.video_size()?;
+        let (width, height) = self.frames.video_size()?;
         (width > 0 && height > 0).then(|| width as f32 / height as f32)
     }
 
     /// **渲染层每帧调这个**，请求一帧（非阻塞，60Hz 也只会让引擎处理一次）。
     pub fn request_frame(&self, request: FrameRequest) {
         {
-            let mut slot = self.slot.request.frame();
-            *slot = request;
+            let mut frame = self.request.frame();
+            *frame = request;
         }
-        if !self.slot.request.want_frame.swap(true, Ordering::AcqRel) {
+        if !self.request.want_frame.swap(true, Ordering::AcqRel) {
             let _ = self
-                .slot
                 .engine
                 .handle
                 .send_cmd(ErikaCmd::Render(RenderCmd::Wake));
@@ -393,10 +395,55 @@ impl ErikaVideoSource {
     /// 只在**第一次**调用有意义（引擎那边一次性置上），但重复调用无害。
     pub(crate) fn report_video_unavailable(&self, reason: String) {
         let _ = self
-            .slot
             .engine
             .handle
             .send_cmd(ErikaCmd::VideoUnavailable(reason));
+    }
+
+    /// 发一条命令给引擎（和 [`ErikaPlayer`](crate::ErikaPlayer) 的方法同一条队列）。
+    ///
+    /// 引擎已经退出时静默失败 —— 和句柄那边一致。
+    fn send(&self, cmd: ErikaCmd) {
+        let _ = self.engine.handle.send_cmd(cmd);
+    }
+
+    // ── 控制面 ────────────────────────────────────────────────────────────
+    //
+    // 组件层用它发控制命令：`paused` / `muted` / `volume` / `rate` 这些 prop 在组件体里
+    // 直接映射成命令，**不过 JSON、不经过平台层**。内部自建的引擎和外部传入的引擎在这一
+    // 层是同一种东西（都是会话），所以两条路共用这一组方法。
+    //
+    // 这不是"第二套控制 API"：校验 / 夹逼和 `ErikaPlayer` 用的是同一份
+    // [`normalize_volume`](crate::core::player::normalize_volume) /
+    // [`normalize_rate`](crate::core::player::normalize_rate)。
+
+    /// 开始播放（没媒体时引擎什么都不做，不报错）。
+    pub(crate) fn play(&self) {
+        self.send(ErikaCmd::Playback(PlaybackCmd::Play));
+    }
+
+    /// 暂停（没媒体时引擎什么都不做，不报错）。
+    pub(crate) fn pause(&self) {
+        self.send(ErikaCmd::Playback(PlaybackCmd::Pause));
+    }
+
+    /// 静音开关。**不改变**记住的音量。
+    pub(crate) fn set_muted(&self, muted: bool) {
+        self.send(ErikaCmd::Settings(SettingsCmd::Muted(muted)));
+    }
+
+    /// 音量 0..=1：非法值丢弃，其余夹到区间内。
+    pub(crate) fn set_volume(&self, volume: f32) {
+        if let Some(volume) = crate::core::player::normalize_volume(volume) {
+            self.send(ErikaCmd::Settings(SettingsCmd::Volume(volume as f64)));
+        }
+    }
+
+    /// 倍速：非有限或 `<= 0` 丢弃（上游会 normalize 成 1.0，放过去只会让 UI 显示和实际不一致）。
+    pub(crate) fn set_rate(&self, rate: f64) {
+        if let Some(rate) = crate::core::player::normalize_rate(rate) {
+            self.send(ErikaCmd::Settings(SettingsCmd::Rate(rate)));
+        }
     }
 
     /// 注册"有新帧时叫醒宿主"的回调。
@@ -405,18 +452,18 @@ impl ErikaVideoSource {
     /// 引擎线程调 `redraw()`）；Linux 的控件不注册 —— 它有 GTK frame clock。
     #[cfg(target_os = "windows")]
     pub(crate) fn set_host_waker(&self, waker: std::sync::Arc<dyn Fn() + Send + Sync>) {
-        self.slot.frames.set_waker(waker);
+        self.frames.set_waker(waker);
     }
 
     /// 摘掉叫醒回调（控件卸载 / 换绑时）。
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_host_waker(&self) {
-        self.slot.frames.clear_waker();
+        self.frames.clear_waker();
     }
 
     /// 现在有没有画面可画（**零成本、非阻塞**）。
     pub fn has_frame(&self) -> bool {
-        self.slot.frames.has_frame()
+        self.frames.has_frame()
     }
 
     /// 一次拿到「代号 + 帧」。代号没变 = 没有新帧。
@@ -424,13 +471,13 @@ impl ErikaVideoSource {
     /// 渲染层每帧调它（`erika.video` 控件的 `FrameBinder`），出帧测试也用它 ——
     /// 这是 `FrameSlot` 唯一的读口，控件以外没人能验证"像素真的出来了"。
     pub fn frame_snapshot(&self) -> (u64, Option<Arc<FrameImage>>) {
-        self.slot.frames.current()
+        self.frames.current()
     }
 }
 
-impl PartialEq for ErikaVideoSource {
+impl PartialEq for ErikaSession {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.slot, &other.slot) // 同一个帧源
+        self.id == other.id // 号单调递增、永不复用 → 精确
     }
 }
-impl Eq for ErikaVideoSource {}
+impl Eq for ErikaSession {}
