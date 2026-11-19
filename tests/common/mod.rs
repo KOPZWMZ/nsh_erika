@@ -5,8 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nsh_erika::ErikaPlayer;
-use nsh_erika::{MediaRequest, PlayerState};
+use nsh_erika::{ErikaPlayer, ErikaSession, MediaRequest, PlayerState};
 
 pub const TEST_MEDIA: &str = "tiny.mp4";
 /// 只有视频轨、没有音频（h264 64x64 / 20 帧 / 2 秒）。
@@ -16,8 +15,30 @@ pub const TEST_MEDIA: &str = "tiny.mp4";
 /// 而播放时钟没有音轨时由墙钟推进，更可控。
 pub const SILENT_MEDIA: &str = "silent.mp4";
 pub const OTHER_MEDIA: &str = "tiny.mkv";
-pub fn new_player() -> ErikaPlayer {
-    ErikaPlayer::new().expect("引擎应该能起来")
+/// 一个测试用的引擎：**守卫 + 借用句柄**。
+///
+/// 引擎的所有权在守卫（`ErikaSession`）手里 —— 它不可克隆，`Drop` 时停引擎。
+/// 所以它必须活到测试结束，这就是本结构存在的理由（以前 `ErikaPlayer::new()`
+/// 自己兼着"建引擎"和"持有引擎"两件事）。
+pub struct Player {
+    pub player: ErikaPlayer,
+    _engine: ErikaSession,
+}
+
+impl std::ops::Deref for Player {
+    type Target = ErikaPlayer;
+    fn deref(&self) -> &ErikaPlayer {
+        &self.player
+    }
+}
+
+pub fn new_player() -> Player {
+    let engine = ErikaSession::create().expect("引擎应该能起来");
+    let player = engine.player();
+    Player {
+        player,
+        _engine: engine,
+    }
 }
 pub fn media(name: &str) -> MediaRequest {
     // name 在用例里写死
@@ -35,7 +56,7 @@ fn media_path(name: &str) -> PathBuf {
         .join(name)
 }
 pub struct Session {
-    pub player: ErikaPlayer,
+    pub player: Player,
     _lock: MutexGuard<'static, ()>,
 }
 

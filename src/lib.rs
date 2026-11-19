@@ -3,7 +3,8 @@
 //! 把 [erika](https://github.com/AimesSoft/liberika) 的视频 / 字幕 / 弹幕画面接进
 //! NSH（Rust UI）的 **native component** `erika.video`。
 //!
-//! 形状和 media_kit 一样:**播放器是独立的句柄,画面是接收帧源的控件**,两者分开。
+//! **引擎归组件、句柄归页面**：组件创建/销毁引擎，页面拿一个句柄控制它。
+//! 句柄里有且只有"使用权"——关机权在组件手里（卸载即销毁）。
 //!
 //! ## 用法
 //!
@@ -19,11 +20,10 @@
 //!     nsh_erika::register(components);
 //! }
 //!
-//! // 页面：句柄和帧源都在外面创建
-//! let player = ErikaPlayer::new()?;
-//! player.open(MediaRequest::new(uri));
-//! player.play();
-//! view().child(nsh_erika::ErikaVideo(&player));    // 控件只负责显示
+//! // 页面：句柄此刻就把引擎建好了，交给组件后由组件管生死
+//! let player = nsh_erika::ErikaPlayer::new()?;
+//! view().child(nsh_erika::erika_video().src(uri).player(player.clone()));
+//! button().on_press(move || player.pause());
 //! ```
 //!
 //! ## 读直连,写走队列
@@ -46,7 +46,7 @@
 //! │ cmd.rs      命令词汇表:ErikaCmd 五族                                  │
 //! │ player.rs   ErikaPlayer + ErikaStatus                                │
 //! │ listener.rs 三条订阅通道的出口:ErikaStatusListener / …Listener + ErikaEvent │
-//! │ source.rs   ErikaVideoSource + FrameSlot + FrameImage（帧载荷）       │
+//! │ source.rs   ViewSource  + FrameSlot + FrameImage（帧载荷）       │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ┌ 平台适配层 —— 唯一允许出现 gtk / D2D 的地方 ─────────────────────────┐
 //! │ linux/native_view.rs   ErikaView：`gtk::Picture` + tick 回调          │
@@ -75,27 +75,51 @@
 //! 换哪个、怎么提示用户，都由调用者决定（它不知道宿主还有没有别的播放器可用）。
 //! `ErikaPlayer::new()` 本身就失败时是同步 `Err`，那时压根别建控件。
 //!
-//! ## 用法：句柄在外面，控件只显示
+//! ## 两种用法
+//!
+//! **① 纯声明式**（不要句柄，控制全走 props）：
 //!
 //! ```no_run
 //! # use nsh_core::prelude::*;
 //! # fn page() -> impl IntoElement {
-//! // 1) 句柄在外面创建
-//! let player = nsh_erika::ErikaPlayer::new().expect("引擎起不来");
-//! player.open(nsh_erika::MediaRequest::new("/path/to/video.mkv"));
-//! player.play();
-//!
-//! // 2) 页面里只放"显示"；控制条用应用自己的 NSH 元素画，直接调句柄
-//! view()
-//!     .flex_col()
-//!     .flex_1()
-//!     .child(nsh_erika::ErikaVideo(&player).flex_1())
-//!     .child(text("控制条写在这：button().on_press(move || player.pause())"))
+//! let paused = signal(false);
+//! view().flex_1().child(
+//!     nsh_erika::erika_video()
+//!         .src("/path/to/video.mkv")
+//!         .paused(move || paused.get())   // 引擎由组件建，也由它销毁
+//!         .flex_1(),
+//! )
 //! # }
 //! ```
 //!
-//! 控件**不自建引擎**、也没有任何控制 prop：它的 prop 表只有 `source`（帧源的号）。
-//! 为什么是号而不是句柄 —— NSH 的组件边界只能过 JSON，见 [`ErikaVideo`] 的说明。
+//! **② 拿句柄**（要 seek / 弹幕 / 轨道 / 订阅时）：
+//!
+//! ```no_run
+//! # use nsh_core::prelude::*;
+//! # fn page() -> impl IntoElement {
+//! // 这一行就把引擎建好了；句柄里带一张所有权票据
+//! let player = nsh_erika::ErikaPlayer::new().expect("引擎起不来");
+//! let mut progress = player.subscribe_progress();      // 立刻可订阅，不用等挂载
+//! let position = signal(std::time::Duration::ZERO);
+//! spawn(async move {
+//!     while let Some(p) = progress.next().await { position.set(p.position) }
+//! });
+//!
+//! view()
+//!     .flex_col()
+//!     .flex_1()
+//!     .child(
+//!         nsh_erika::erika_video()
+//!             .src("/path/to/video.mkv")
+//!             .player(player.clone())   // 组件挂载时认领票据 → 卸载即销毁
+//!             .flex_1(),
+//!     )
+//!     .child(text(move || format!("{:?}", position.get())))
+//! # }
+//! ```
+//!
+//! **平台层只拿到一个号**（`source`，组件用 `player.session_id()` 写上去）——
+//! 因为 NSH 的组件边界只能过 JSON，句柄过不去。号空间在 `core::registry`。
 //!
 //! ## 平台
 //!
@@ -132,6 +156,9 @@ pub(crate) use linux as backend;
 mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
+use nsh_core::JsonValue;
+
+use nsh_core::prelude::*;
 #[cfg(target_os = "windows")]
 pub(crate) use windows as backend;
 
@@ -147,7 +174,7 @@ pub(crate) use windows as backend;
 //   3. **上游类型一律走 `nsh_erika::erika::…`**;只有"出现在我们公开字段 / 参数里"的
 //      才在对应模块就地再放一份 —— 让写面板的人不用在两个命名空间之间来回跳。
 //   4. **逃生舱挂到 `escape-hatch` feature 下,默认不导出**(见 `video` 模块与
-//      `ErikaPlayer::video_source`)。判据:它出现在首页就是"错误的邀请"。
+//      `ErikaPlayer::session`)。判据:它出现在首页就是"错误的邀请"。
 //
 // 想加一个导出之前先问"它属于上面哪一条"。一条都不属于 → 它大概是内部实现,不该导。
 
@@ -204,7 +231,7 @@ pub mod events {
 /// 帧源与帧载荷：**自写控件 / 出帧自检**才用，普通应用用 [`ErikaVideo`](crate::ErikaVideo)。
 #[cfg(feature = "escape-hatch")]
 pub mod video {
-    pub use crate::core::source::{ErikaVideoSource, FrameImage, FrameRequest};
+    pub use crate::core::source::{FrameImage, FrameRequest, ViewSource};
     #[cfg(target_os = "windows")]
     pub use crate::windows::frame::SharedTexture;
     #[cfg(target_os = "linux")]
@@ -223,10 +250,28 @@ pub use ::erika::MediaRequest;
 pub use ::erika::PlayerState;
 pub use core::player::ErikaPlayer;
 
+/// 会话守卫：**引擎的唯一所有者**，`Drop` 即关机。**只在 `escape-hatch` 下导出。**
+///
+/// 正常用法**拿不到它** —— 有组件时，守卫由 [`ErikaPlayer::new`] 装进句柄的票据、
+/// 再由组件在挂载时 [`adopt`](ErikaVideo) 认领。它出现在这里，是给"没有 UI 的场景"用的：
+/// 集成测试、无头脚本、出帧自检。
+///
+/// ```ignore
+/// let engine = ErikaSession::create()?;   // 守卫：活到它 drop
+/// let player = engine.player();           // 借用句柄：发命令、直读
+/// ```
+///
+/// ⚠️ 它**不可克隆**：整个进程里，一个引擎只可能有一个所有者。
+#[cfg(feature = "escape-hatch")]
+pub use core::session::ErikaSession;
+
+/// 组件内部用的别名：上面那个导出只在逃生舱下存在，组件两种配置都要能编。
+use crate::core::session::ErikaSession as SessionOwner;
+
 /// 原生控件名。
 ///
-/// 一般不用直接写：用 [`ErikaVideo`]（`nsh_erika::ErikaVideo(&player)`）就会带上 `source` prop。
-/// 手写时是 `native(nsh_erika::COMPONENT_NAME).prop("source", source.id())`。
+/// 一般不用直接写：用 [`ErikaVideo`]（`nsh_erika::erika_video().src(uri)`）就够了 ——
+/// `source` 号（`player.session_id()`）由组件自己写上去。
 pub const COMPONENT_NAME: &str = "erika.video";
 
 /// 把 `erika.video` 注册进 `components`。
@@ -237,33 +282,134 @@ pub fn register(component: &PlatformComponents) {
     component.register(COMPONENT_NAME, backend::native_view::factory());
 }
 
-impl ErikaPlayer {
-    /// 这个播放器的画面：`view().child(player.video().flex_1())`。
-    ///
-    /// 和 [`ErikaVideo`] 是同一个东西，只是从播放句柄出发——一个播放器只能有一个画面源，
-    /// 所以不需要另外拿 `video::ErikaVideoSource`（那是逃生舱，要 `escape-hatch`）。返回的是普通的 NSH 元素，
-    /// `.flex_1()` / `.rounded(…)` 这些照常链式调用。
-    pub fn video(&self) -> nsh_core::prelude::NativeView {
-        view_for(self.source_id())
+/// 画面的 props。
+///
+/// **引擎由组件创建**（一次性、同步），失败就渲染错误界面。
+///
+/// | prop | 方向 | 说明 |
+/// |---|---|---|
+/// | `src` | 进 | 片源；变了就重新 `open` |
+/// | `slot` | 进/出 | 邮箱：组件把「号 + 句柄」投递进去，外部据此控制（不给就是纯声明式） |
+/// | `paused` / `muted` / `volume` / `rate` | 进 | **声明式意图**，是这几个状态的唯一真相源 |
+///
+/// `source`（帧源号）不是 prop：组件从邮箱里读出来，写给平台层。
+#[derive(Debug, Clone, PartialEq, Props)]
+pub struct ErikaVideoProps {
+    /// 片源地址。空串 = 没有媒体（引擎照样建，只是没东西可放）。
+    #[prop(default)]
+    pub src: Prop<String>,
+    /// 邮箱：组件创建引擎后把句柄投递到这里。不给 = 纯声明式（只能靠 props 控制）。
+    #[prop(default)]
+    pub player: Prop<Option<ErikaPlayer>>,
+    /// 暂停中。
+    #[prop(default)]
+    pub paused: Prop<bool>,
+    /// 静音。
+    #[prop(default)]
+    pub muted: Prop<bool>,
+    /// 音量 0..1。
+    #[prop(default)]
+    pub volume: Prop<f32>,
+    /// 倍速（> 0）。
+    #[prop(default)]
+    pub rate: Prop<f64>,
+}
+
+/// 一块播放器的画面。**引擎的生死由它负责**。
+///
+/// ```ignore
+/// // ① 只给 src：组件自己建引擎，控制全走 props
+/// erika_video().src(uri).paused(move || paused.get())
+///
+/// // ② 给一个句柄：组件认领它的所有权票据，从此卸载即销毁
+/// let player = ErikaPlayer::new()?;                     // 引擎此刻就在
+/// erika_video().src(uri).player(player.clone())
+/// ```
+///
+/// | 给了什么 | 引擎谁建 | 控制 | 关机 |
+/// |---|---|---|---|
+/// | 只有 `src` | 组件 | 只能 props | 组件 |
+/// | `src` + `player` | 页面（`new()` 那一刻） | 句柄全能力 | 组件（认领后） |
+///
+/// 卸载即销毁：组件没了，引擎就没（守卫那一份只在组件手里）。
+#[component]
+pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
+    let given = props.player.get_untracked();
+
+    let (owned, player) = match given {
+        Some(handle) => match handle.adopt() {
+            Some(session) => {
+                let p = session.player();
+                (Some(session), p)
+            }
+            None => {
+                // 票据已被认领（镜像），或者上一次挂载已经把它用掉了
+                if handle.is_engine_alive() {
+                    log::debug!("erika.video: 句柄已被认领，只显示")
+                } else {
+                    log::error!(
+                        "erika.video: 这个 ErikaPlayer 已被上一次挂载消费（元素不能放进条件区域）"
+                    )
+                }
+                (None, handle)
+            }
+        },
+        None => match SessionOwner::create() {
+            Ok(session) => {
+                let p = session.player();
+                (Some(session), p)
+            }
+            Err(error) => {
+                log::error!("erika.video: 引擎起不来: {error}");
+                return view().child(text(error)).into_element();
+            }
+        },
+    };
+    let _keep = owned.map(stored);
+
+    // 片源：body 里开一次，之后 `src` 变了再开（同一个值不会重复打开）。
+    // 变回空串只是"不再换片"，不会关掉已经开着的媒体。
+    let opened = props.src.get();
+    if !opened.is_empty() {
+        player.open(MediaRequest::new(opened.clone()));
     }
-}
+    effect({
+        let p = player.clone();
+        move || {
+            let uri = props.src.get();
+            if uri != opened && !uri.is_empty() {
+                p.open(MediaRequest::new(uri));
+            }
+        }
+    });
 
-/// 一个播放器的画面：`view().child(ErikaVideo(&player).flex_1())`。
-///
-/// 这是对外的**唯一**画面入口 —— 里面做了三件事，使用者都看不到：把句柄换成一个号、
-/// 生成 `native("erika.video")` 元素、把号作为 `source` prop 放上去。返回的是普通
-/// NSH 元素，`.flex_1()` / `.rounded(…)` 这些照常链式调用。
-///
-/// 传 `&player` 或 `player.clone()` 都行（`Borrow`）。
-///
-/// 名字是 PascalCase 只是为了写起来像元素；NSH 自带的元素函数是 snake_case
-/// （`video()`、`text()`），两者风格上并不冲突。
-#[allow(non_snake_case)]
-pub fn ErikaVideo(player: impl std::borrow::Borrow<ErikaPlayer>) -> nsh_core::prelude::NativeView {
-    view_for(player.borrow().source_id())
-}
+    effect({
+        let p = player.clone();
+        move || {
+            if props.paused.get() {
+                p.pause()
+            } else {
+                p.play()
+            }
+        }
+    });
+    effect({
+        let p = player.clone();
+        move || p.set_muted(props.muted.get())
+    });
+    effect({
+        let p = player.clone();
+        move || p.set_volume(props.volume.get())
+    });
+    effect({
+        let p = player.clone();
+        move || p.set_rate(props.rate.get())
+    });
 
-/// 帧源号 → `erika.video` 元素。
-fn view_for(id: u64) -> nsh_core::prelude::NativeView {
-    nsh_core::prelude::native(COMPONENT_NAME).prop("source", nsh_core::JsonValue::from(id))
+    // 号在这个组件的整个生命里是**常量**（一个组件 = 一个引擎），所以直接写常量，
+    // 不去读邮箱的信号：邮箱可能比组件先被 dispose，那时读信号会 panic。
+    // 「画面解绑」由元素销毁 + `Session::drop` 的 `unregister` 负责（C2 起守卫负责关机）。
+    native(COMPONENT_NAME)
+        .prop("source", JsonValue::from(player.session_id()))
+        .into_element()
 }

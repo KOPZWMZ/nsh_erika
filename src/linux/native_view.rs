@@ -7,21 +7,20 @@
 //! 它就是一个 `gtk::Picture`：帧由引擎线程导出成线性 dma-buf，tick 回调里导入成
 //! `GdkDmabufTexture` 贴上去（那套在 [`crate::linux::frames`] 里）。
 //!
-//! ## 控件不自建引擎
+//! ## 控件只有"画"
 //!
-//! 播放器和帧源都在**外面**创建（[`ErikaPlayer::new`](crate::ErikaPlayer::new)），控件
-//! 只负责显示：页面里用 [`ErikaVideo`](crate::ErikaVideo)（或
-//! [`ErikaPlayer::video`](crate::ErikaPlayer::video)）把帧源传进来，控制全在
-//! [`ErikaPlayer`](crate::ErikaPlayer) 上。没拿到帧源就只显示空白。
+//! 引擎归组件层（[`ErikaVideo`](crate::ErikaVideo)）：外部给了句柄就用外部那个，没给就自己
+//! 异步建一个。控件拿到的是一个**号**，`ViewSource ::resolve` 之后只做两件事：
+//! 每帧要帧、把帧贴到 `gtk::Picture` 上。没有号就只显示空白。
 //!
 //! ## prop
 //!
 //! | prop | 类型 | 含义 |
 //! |---|---|---|
-//! | `source` | number \| null | **要显示的帧源号**（`ErikaVideoSource::id()`）；`null` = 解绑 |
+//! | `source` | number \| null | **要显示的帧源号**；`null` = "还没有号"，保持现状（不解绑、不报错） |
 //!
-//! 只有这一个 prop，而且它是"身份"不是"控制"：播放、暂停、选轨、弹幕、字幕全在
-//! [`ErikaPlayer`](crate::ErikaPlayer) 上，控件一概不碰。
+//! 只有这一个 prop。它是"身份"不是"控制"：`paused` / `muted` / `volume` / `rate` 这些
+//! prop 在组件层就被翻译成引擎命令，**根本到不了这里** —— 控件不碰播放语义。
 
 use std::rc::Rc;
 
@@ -29,7 +28,7 @@ use gtk::prelude::*;
 use nsh_core::JsonValue;
 use nsh_platform_linux::{ComponentContext, ComponentFactory, NativeComponent, gtk4 as gtk};
 
-use crate::core::source::ErikaVideoSource;
+use crate::core::source::ViewSource;
 use crate::linux::frames::FrameBinder;
 
 /// 注册用的工厂。
@@ -66,21 +65,25 @@ impl NativeComponent for ErikaView {
         self.picture.clone().upcast()
     }
 
-    /// 唯一的 prop：`source`（要显示的帧源号）。
+    /// 平台层唯一认识的 prop：`source`（要显示的帧源号）。
     ///
-    /// 控件**不自建引擎、也不控制播放** —— 播放器句柄在应用侧，这里只回答"显示谁"。
+    /// 控制类 prop（`paused` / `muted` / `volume` / `rate`）**不经过这里** —— 它们在组件层
+    /// 就被翻译成引擎命令了。控件只回答"显示谁的帧"，别的什么都不管。
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
         match name {
             "source" => {
-                let id = value.and_then(JsonValue::as_u64);
-                match id.and_then(ErikaVideoSource::resolve) {
+                // `null` = "还没有号"（引擎正在异步创建）：保持现状，不解绑也不报错。
+                let Some(id) = value.and_then(JsonValue::as_u64) else {
+                    return;
+                };
+                match ViewSource::resolve(id) {
                     Some(source) => {
                         self.warned = false;
                         self.frames.bind(source);
                     }
                     None => {
                         self.frames.unbind();
-                        if let Some(id) = id.filter(|_| !self.warned) {
+                        if !self.warned {
                             self.warned = true;
                             log::warn!(
                                 "erika.video: source={id} 找不到帧源（句柄已经被 drop 了？）"

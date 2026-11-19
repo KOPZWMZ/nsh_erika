@@ -27,22 +27,27 @@ fn main() {
 
     for i in 0..n {
         print!("iter {i:02}: new ... ");
-        let p = nsh_erika::ErikaPlayer::new().expect("new 失败");
+        // 守卫（不可克隆，drop 即关机）+ 借用句柄
+        let engine = nsh_erika::ErikaSession::create().expect("create 失败");
+        let p = engine.player();
 
         match mode.as_str() {
             "forget" => {
-                // 故意泄漏：不析构，直接忘掉
+                // 故意泄漏：连守卫一起忘掉 —— 引擎线程会一直跑到进程退出
                 std::mem::forget(p);
-                println!("forgot");
+                std::mem::forget(engine);
+                println!("forgot（守卫也丢了：引擎不会停）");
             }
             "bare" => {
                 drop(p);
-                println!("dropped（未 stop）");
+                drop(engine); // 守卫 drop → unregister + stop()，不等
+                println!("dropped（守卫 drop：只 stop，不等）");
             }
             _ => {
                 p.stop();
                 std::thread::sleep(Duration::from_millis(20));
                 drop(p);
+                drop(engine);
                 println!("stopped + dropped");
             }
         }

@@ -44,7 +44,7 @@
 //!
 //! 所以这条线程不是"播放需要线程"(解码 erika 自己在 `erika-playback` 线程里做),
 //! 而是**"把阻塞调用关进笼子"**需要。UI 线程上只剩三件便宜事:
-//! 发命令(`send_cmd`)、读状态(`get_state`)、取帧(`ErikaVideoSource::frame_snapshot`)。
+//! 发命令(`send_cmd`)、读状态(`get_state`)、取帧(`ViewSource::frame_snapshot`)。
 //!
 //! # 形状:media_kit
 //!
@@ -61,7 +61,7 @@
 //!
 //! # 出帧:按需,不自驱
 //!
-//! 渲染层每帧调 [`ErikaVideoSource::request_frame`](crate::ErikaVideoSource::request_frame)。
+//! 渲染层每帧调 [`ViewSource::request_frame`](crate::video::ViewSource::request_frame)。
 //! **没有请求就不出帧** —— 不导出、不 capture、不建纹理,窗口被限频时不会空转烧 GPU,
 //! 也不会和 UI 抢同一个队列到抖动。
 //!
@@ -74,19 +74,22 @@
 //! seek + flush 音频环,窗口可见性一抖就是连续爆音(dev_doc §7 有完整的日志链)。
 
 use crate::core::cmd::{ErikaCmd, PlaybackCmd, SettingsCmd, SubtitleCmd};
+
 use crate::core::engine::ErikaEngine;
+use crate::core::session::ErikaSession;
 
 #[cfg(feature = "escape-hatch")]
-use crate::core::source::ErikaVideoSource;
-use crate::core::source::{FrameSlot, Request};
+use crate::core::source::ViewSource;
+
 use crate::events::{ErikaEventsListener, ErikaProgressListener, ErikaStatusListener};
 
 use actor_lite::ActorHandle;
 #[cfg(feature = "escape-hatch")]
 use erika::presenter::PresenterRuntime;
-use erika::{ChapterInfo, MediaRequest, PlayerState, TrackInfo, TrackSelection};
+use erika::{ChapterInfo, MediaRequest, Player, PlayerState, TrackInfo, TrackSelection};
+use nsh_core::element::{JsHost, JsIn, JsOwned, JsValue, PropError, TsTypes};
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 mod danmaku;
 mod subtitle;
@@ -100,64 +103,6 @@ pub use subtitle::{
     ErikaSubtitle, SubtitleOverrides, SubtitlePlacement, SubtitleSnapshot, SubtitleTextStyle,
 };
 pub use tracks::ErikaTracks;
-
-/// 引擎线程的"最后一位守卫":**最后一个句柄 drop 时**,它负责停下来并等引擎退干净。
-///
-/// 没有它的话,`drop(player)` 只是关掉命令通道就立刻返回,引擎线程还在
-/// `PresenterRuntime` 的析构里 free 一堆东西 —— 主线程这时候可能已经在跑
-/// `main` 的收尾甚至进程退出,两者赛跑就是堆损坏。
-///
-/// **正确性依赖 actor-lite ≥ 0.1.1 的 `is_alive()` 语义**(见 [`shutdown_engine`])。
-/// 0.1.0 里它在 `run()` 返回时就发 false,比 actor 字段的析构早一个窗口 ——
-/// 那正是我们踩过的偶发 SIGABRT / 堆损坏。
-pub(crate) struct EngineGuard {
-    pub(crate) handle: ActorHandle<ErikaEngine>,
-}
-
-impl Drop for EngineGuard {
-    fn drop(&mut self) {
-        shutdown_engine(&self.handle);
-    }
-}
-
-/// 等引擎退干净时的轮询间隔。
-const SHUTDOWN_POLL: Duration = Duration::from_millis(5);
-
-/// 等引擎退干净的上限。
-///
-/// 正常退出(Vulkan 设备 + 解码器 + libass + 字体库全销毁)是几十到几百毫秒,
-/// 5 秒是"确定卡死"的判据,不是性能预算 —— 给足余量,别把"慢"误判成"卡"。
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// `stop()` 之后轮询到**引擎线程及其资源真的释放完**(或超时)。
-///
-/// 这里等的不是"`run()` 返回",而是"actor 的字段已经析构完" ——
-/// `PresenterRuntime`(Vulkan 设备 / 解码器 / libass / 字体库)的 drop 发生在
-/// `run()` 返回**之后**,而那段时间才是退出耗时的大头。
-///
-/// 依赖 actor-lite ≥ 0.1.1:`is_alive() == false` 由 `AliveGuard` 在 actor 字段
-/// 析构完之后才发出。0.1.0 的语义会早一个窗口,拿它做退出判断就会与后台线程的
-/// `free()` 赛跑 → glibc 堆损坏 + SIGABRT(见 actor-lite CHANGELOG 0.1.1)。
-///
-/// 这条语义的**精确契约**由 actor-lite 自己的 `tests/is_alive_semantics.rs` 钉住,
-/// 这里不重复钉:端到端那层只能靠 `/proc/*/comm` 匹配线程名,在没有 GPU 的环境里会被
-/// Mesa 软件光栅的无名线程误伤(实测 2026-11-14),已删。
-///
-/// 超时后**放弃等待**并记一条 warn:不能把宿主的退出流程挂死(关闭窗口卡 5 秒以上
-/// 比崩溃还难查),但也不能静默 —— 这条日志是"退出时又和后台赛跑"的第一线索。
-fn shutdown_engine(handle: &ActorHandle<ErikaEngine>) {
-    handle.stop();
-    let deadline = std::time::Instant::now() + SHUTDOWN_TIMEOUT;
-    while handle.is_alive() && std::time::Instant::now() < deadline {
-        std::thread::sleep(SHUTDOWN_POLL);
-    }
-    if handle.is_alive() {
-        log::warn!(
-            "erika: 引擎线程 {}ms 内未退干净，放弃等待（进程退出时可能与后台释放赛跑）",
-            SHUTDOWN_TIMEOUT.as_millis()
-        );
-    }
-}
 
 /// [`ErikaPlayer::call_with`] 等回执的上限。
 ///
@@ -234,109 +179,106 @@ pub struct ErikaProgress {
     /// 总时长（`None` = 还没 probe 完 / 没有媒体）。
     pub duration: Option<Duration>,
 }
-/// 播放器句柄:**只管控制与状态**,碰不到帧(帧走 `video::ErikaVideoSource`,逃式舱加 feature 才有)。
+/// 播放器句柄：**控制面**（命令通道 + 直读）+ 身份（号）+ 可能携带的所有权票据。
 ///
-/// `Clone` 成本极低(两次引用计数 +1),可以随便传,也可以跨线程用。
-/// 身份比较看 `engine` 的 `Arc`(同一个播放器 = 同一个 `Arc`),所以能直接拿来比 props
-/// 变没变。
+/// - `Clone` 很便宜：几个 `Arc` 各加一，可以随便传、可以跨线程用；
+/// - `PartialEq` **比号**（号单调递增、永不复用），所以能直接放进 `signal()` 比 props 变没变；
+/// - 平台控件拿到的只是它的**视图侧**（[`ViewSource`](crate::video::ViewSource)），不是它本身。
 ///
-/// 放下最后一个句柄时命令通道关闭 → 引擎的 `recv_cmd_timeout` 返回 `Closed` →
-/// `run` 退出(presenter 随之 Drop,音频设备、解码线程一起回收)。没有 `dispose`:
-/// 想收掉引擎,就把所有句柄都 drop 掉。
+/// ## 谁负责关机
+///
+/// **不是这个类型**。`new()` 会把守卫（`ErikaSession`）装进 `session` 那张票据里；
+/// 把句柄交给 [`ErikaVideo`](crate::ErikaVideo) 后，组件在挂载时 `adopt()` 认领它 ——
+/// 从此卸载即销毁。没人认领时，票据随最后一根 clone 一起 drop，引擎跟着关。
+///
+/// 所以这里的字段（`player` / `engine`）**只是使用权**：引擎被停掉之后，命令会静默失败
+/// （`send_cmd` 返回 `Err(Closed)`），读侧拿到冻结的最后一帧，`status()` 会补一句
+/// `"engine thread is gone"`。
+///
+/// ⚠️ 这些字段只能由 `new()` / `ErikaSession::player()` 写：它们必须属于**同一台引擎**，
+/// 这个不变式由构造函数保证（拆开的字段没有类型层面的绑定）。
+#[derive(Clone)]
 pub struct ErikaPlayer {
-    player: erika::Player,
-    /// 引擎 + 帧槽 + 出帧请求，和帧源共享。**播放句柄负责存活期**：最后一个
-    /// `ErikaPlayer` drop 时把注册表里的那一条摘掉，控件下一帧自己停。
-    slot: Arc<crate::core::source::Slot>,
-}
-
-impl Clone for ErikaPlayer {
-    fn clone(&self) -> Self {
-        self.slot.player_cloned();
-        Self {
-            player: self.player.clone(),
-            slot: self.slot.clone(),
-        }
-    }
-}
-
-impl Drop for ErikaPlayer {
-    fn drop(&mut self) {
-        self.slot.player_dropped();
-    }
+    pub(crate) id: u64,
+    pub(crate) player: Player,
+    pub(crate) engine: ActorHandle<ErikaEngine>,
+    /// 所有权票据：**只有 `new()` 产出的句柄带**，组件内部自建的没有。
+    /// 组件挂载时 `adopt()` 把它取走 —— 从此关机权归组件。
+    pub(crate) session: Option<Arc<Mutex<Option<ErikaSession>>>>,
 }
 
 impl PartialEq for ErikaPlayer {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.slot, &other.slot)
+    fn eq(&self, o: &Self) -> bool {
+        self.id == o.id
     }
 }
 impl Eq for ErikaPlayer {}
-
+impl JsValue for ErikaPlayer {
+    fn ts_type(_: &mut TsTypes) -> String {
+        "never".into()
+    }
+    fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
+        Err(value.expected("an ErikaPlayer（句柄只能从 Rust 侧传）"))
+    }
+    fn to_js<'a>(&self, _: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError> {
+        Err(PropError("ErikaPlayer 不能跨到 JS".into()))
+    }
+}
 impl ErikaPlayer {
-    /// 建一个播放器:**立刻返回**。画面用 [`video`](Self::video) / [`ErikaVideo`](crate::ErikaVideo)。
+    /// 这个会话的**视图侧**（帧邮箱 + 出帧请求）。**需要 `escape-hatch` feature。**
     ///
-    /// 引擎线程与 `PresenterRuntime` 的创建都在内部完成(几十毫秒,发生在引擎线程上)。
-    /// 此时**没有媒体**。
+    /// 它住在注册表里，所以会话已经销毁 / 已经摘表时返回 `None`。
     ///
-    /// 失败(没有可用的 Vulkan 设备、线程起不来、启动卡住)返回 `Err(原因)`,
-    /// **不 panic** —— 库不该带崩宿主 app,要不要 panic 由调用方决定
-    /// (`erika.video` 控件只把原因打进日志,控件照样挂上去,只是不出画面)。
-    pub fn new() -> Result<Self, String> {
-        let frames = Arc::new(FrameSlot::new());
-        let request = Arc::new(Request::new());
-        let (tx, rx) = std::sync::mpsc::channel();
-        // `try_spawn_thread` 把"构造阶段 panic"变成可回传的错误
-        // (没有 Vulkan 时 `ErikaEngine::new` 就是在这里炸的)。
-        let handle = actor_lite::try_spawn_thread("erika-engine", {
-            let frames = frames.clone();
-            let request = request.clone();
-            move || {
-                let engine = ErikaEngine::new(frames, request);
-                let player = engine.player_clone();
-                let _ = tx.send(player);
-                engine
-            }
-        })
-        .map_err(|error| format!("引擎线程启动失败: {error}"))?;
-        let player = rx
-            .recv_timeout(Duration::from_secs(5))
-            .map_err(|error| format!("引擎线程没能交出 Player: {error}"))?;
-        let engine = Arc::new(EngineGuard { handle });
-        let slot = crate::core::source::Slot::new(engine, frames, request);
-        Ok(Self { player, slot })
-    }
-    /// 这个播放器的帧源（显示句柄）。**需要 `escape-hatch` feature。**
-    ///
-    /// 一般不用它：画面直接写 [`video`](Self::video) / [`ErikaVideo`](crate::ErikaVideo)
-    /// 就行。要"同一个播放器在几处同时显示"（镜像）或者自己管 tick 时才需要。
+    /// 一般不用它：画面直接写 [`ErikaVideo`](crate::ErikaVideo)
+    /// （`erika_video().src(uri).player(p)`）就行。要"同一个播放器在几处同时显示"（镜像）
+    /// 或者自己管 tick 时才需要。
     #[cfg(feature = "escape-hatch")]
-    pub fn video_source(&self) -> ErikaVideoSource {
-        ErikaVideoSource::new(self.slot.clone())
+    pub fn view(&self) -> Option<ViewSource> {
+        crate::core::registry::resolve(self.id)
     }
 
-    /// 帧源的号（画面绑定的目标）。一般不用直接调：用
-    /// [`video`](Self::video) 拿视图。
-    pub(crate) fn source_id(&self) -> u64 {
-        self.slot.id()
+    /// 会话的号。控件绑定显示目标用（`native(COMPONENT_NAME).prop("source", id)`），
+    /// 也是外部"只拿到号"时用来 `resolve` 回句柄的键。
+    pub(crate) fn session_id(&self) -> u64 {
+        self.id
     }
 
-    /// 立刻停掉引擎并**等它退完**(最多 `SHUTDOWN_TIMEOUT`)。
+    /// 建一台引擎，并把**守卫装进句柄**。从这一行起所有方法都真的有效。
     ///
-    /// 引擎线程上住着 `PresenterRuntime`(自带一套 wgpu 29 的 Vulkan 设备)、解码线程、
-    /// libass 和字体。让它在进程收尾时还在 free 东西,就是和主线程赛跑 ——
-    /// 实测会在退出时炸 `corrupted size vs. prev_size`。
+    /// 把返回的句柄交给 [`ErikaVideo`](crate::ErikaVideo)（`.player(p)`），组件会在挂载时
+    /// `adopt()` 认领守卫 —— 从此**关机权归组件**：卸载即销毁。
     ///
-    /// 所以宿主想在退出前先收干净就调它;不调也行,最后一个句柄 drop 时自动走同一套等待
-    /// (控件的 `ErikaVideoSource` 也持有引擎,它和播放句柄一起算"最后一个")。
-    pub fn shutdown(&self) {
-        shutdown_engine(&self.slot.engine.handle);
+    /// 如果这个句柄始终没被任何组件认领，它就随最后一根 clone 一起 drop，引擎跟着关。
+    ///
+    /// 失败（没有可用的 Vulkan 设备 / 线程起不来 / 启动卡住）返回 `Err(原因)`，不 panic ——
+    /// 要不要 panic 由调用方决定。
+    pub fn new() -> Result<Self, String> {
+        let session = ErikaSession::create()?;
+        Ok(Self {
+            id: session.id,
+            player: session.player.clone(),
+            engine: session.engine.clone(),
+            session: Some(Arc::new(Mutex::new(Some(session)))),
+        })
     }
+    /// 引擎线程还活着没有。组件用它区分"票据被别人认领（镜像）"和"票据已被上一次挂载消费"。
+    pub(crate) fn is_engine_alive(&self) -> bool {
+        self.engine.is_alive()
+    }
+
+    pub(crate) fn adopt(&self) -> Option<ErikaSession> {
+        self.session
+            .as_ref()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+    }
+
     /// 弹幕句柄：发弹幕命令 + 读弹幕快照。
     ///
     /// 每次调用返回一个新的句柄值（内部只做一次 Arc 加一），可以直接被 UI 闭包捕获。
     pub fn danmaku(&self) -> ErikaDanmaku {
-        ErikaDanmaku::new(self.slot.engine.clone())
+        ErikaDanmaku::new(self.id, self.engine.clone())
     }
 
     /// 字幕句柄:样式(外观 / 版面)与延迟的读写。
@@ -351,7 +293,7 @@ impl ErikaPlayer {
     /// 引擎已退出时这里静默失败——UI 层面由 [`status`](Self::status) 的存活判定
     /// 报告 `Error`(见那里的注释),不需要每个调用点自己处理。
     fn send(&self, cmd: ErikaCmd) {
-        let _ = self.slot.engine.handle.send_cmd(cmd);
+        let _ = self.engine.send_cmd(cmd);
     }
 
     // ── 三个薄 helper:抵消 `ErikaCmd::Playback(PlaybackCmd::Play)` 这种嵌套噪音,
@@ -453,10 +395,9 @@ impl ErikaPlayer {
     /// **内部存的是 f32**(`set_volume` 落地时 `normalize_volume(volume as f32)`),
     /// 所以真实精度就是 f32 —— 这里跟着真实精度走,上行时 `as f64` 无损。
     pub fn set_volume(&self, volume: f32) {
-        if !volume.is_finite() {
-            return;
+        if let Some(volume) = normalize_volume(volume) {
+            self.send_settings(SettingsCmd::Volume(volume as f64));
         }
-        self.send_settings(SettingsCmd::Volume(volume.clamp(0.0, 1.0) as f64));
     }
 
     /// 当前音量(0.0..=1.0,**f32**)。读的是引擎发布的状态:`watch`,非阻塞,最多滞后一条命令。
@@ -464,7 +405,7 @@ impl ErikaPlayer {
     /// 它和 [`ErikaStatus::volume`] 是同一个值。比较请用容差(示例里用 `±0.01`)——
     /// f32 在 0.3 附近的间隔约 `3e-8`,别写 `abs() < 1e-9` 那种永远不成立的判据。
     pub fn volume(&self) -> f32 {
-        self.slot.engine.handle.get_state().volume
+        self.engine.get_state().volume
     }
 
     /// 静音开关。**不改变 [`volume`](Self::volume)**:上游 `set_muted` 只把输出压到 0,
@@ -475,7 +416,7 @@ impl ErikaPlayer {
 
     /// 当前是否静音(读引擎发布的状态,最多滞后一条命令)。
     pub fn is_muted(&self) -> bool {
-        self.slot.engine.handle.get_state().muted
+        self.engine.get_state().muted
     }
 
     /// 倍速。非法值直接丢弃(上游会把非有限 / `<= 0` normalize 成 1.0,放过去只会
@@ -484,10 +425,9 @@ impl ErikaPlayer {
     /// 变速是 **presenter 让音频环做 time-stretch**(变速不变调):直连 `Player` 的话
     /// 画面会变快而声音不变。
     pub fn set_rate(&self, rate: f64) {
-        if !(rate.is_finite() && rate > 0.0) {
-            return;
+        if let Some(rate) = normalize_rate(rate) {
+            self.send_settings(SettingsCmd::Rate(rate));
         }
-        self.send_settings(SettingsCmd::Rate(rate));
     }
 
     /// 当前**生效**的倍速 —— 直读 `PlaybackSnapshot::clock`(播放中 2ms 更新、暂停 50ms)。
@@ -511,7 +451,7 @@ impl ErikaPlayer {
     /// 落后太多(事件被丢)时会收到 [`ErikaEvent::Resync`](crate::events::ErikaEvent::Resync);
     /// 只有返回 `None` 才是引擎线程没了。
     pub fn subscribe_events(&self) -> ErikaEventsListener {
-        ErikaEventsListener::new(self.slot.engine.handle.get_events_rx())
+        ErikaEventsListener::new(self.engine.get_events_rx())
     }
 
     /// 订阅**状态**(低频):**只在命令路径上**发布(每条命令处理完 / 出错 / open 中途)。
@@ -528,7 +468,7 @@ impl ErikaPlayer {
     ///
     /// 其余限制见 [`ErikaStatusListener`](crate::events::ErikaStatusListener)。
     pub fn subscribe_status(&self) -> ErikaStatusListener {
-        ErikaStatusListener::new(self.slot.engine.handle.state_rx())
+        ErikaStatusListener::new(self.engine.state_rx())
     }
 
     /// 订阅**进度**(10Hz):位置 + 总时长,引擎已经算好。
@@ -546,7 +486,7 @@ impl ErikaPlayer {
     /// });
     /// ```
     pub fn subscribe_progress(&self) -> ErikaProgressListener {
-        ErikaProgressListener::new(self.slot.engine.handle.progress_rx())
+        ErikaProgressListener::new(self.engine.progress_rx())
     }
     /// 在引擎线程上对 `PresenterRuntime` 执行一段操作 —— **presenter 独有 API 的逃生口**。
     ///
@@ -615,7 +555,7 @@ impl ErikaPlayer {
     /// 当前进度(引擎算好的快照,10Hz 刷新)。订阅版见
     /// [`subscribe_progress`](Self::subscribe_progress)。
     pub fn progress(&self) -> ErikaProgress {
-        self.slot.engine.handle.get_progress()
+        self.engine.get_progress()
     }
     /// 总时长。**`stop()` 之后不会变 `None`**(媒体还开着)——
     /// 判断"有没有视频"请用 [`state`](Self::state) 或 [`has_media`](Self::has_media)。
@@ -688,8 +628,8 @@ impl ErikaPlayer {
     /// 引擎线程已经退出时,这里会补一条 `error`(`"engine thread is gone"`),
     /// 免得 UI 以为一切正常。
     pub fn status(&self) -> ErikaStatus {
-        let mut st = self.slot.engine.handle.get_state();
-        if !self.slot.engine.handle.is_alive() {
+        let mut st = self.engine.get_state();
+        if !self.engine.is_alive() {
             if st.error.is_none() {
                 st.error = Some("engine thread is gone".into());
             }
@@ -701,4 +641,11 @@ impl ErikaPlayer {
     pub fn last_error(&self) -> Option<String> {
         self.status().error
     }
+}
+
+pub(crate) fn normalize_volume(volume: f32) -> Option<f32> {
+    volume.is_finite().then(|| volume.clamp(0.0, 1.0))
+}
+pub(crate) fn normalize_rate(rate: f64) -> Option<f64> {
+    (rate.is_finite() && rate > 0.0).then_some(rate)
 }
