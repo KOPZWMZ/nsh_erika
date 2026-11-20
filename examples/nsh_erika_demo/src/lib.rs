@@ -7,7 +7,7 @@
 //! |---|---|---|---|
 //! | ① 生命周期 | `ErikaPlayer::new()`（页面建） | ❌ 只有「返回」 | **进出页面 = 建/销引擎**（首页有线程数读数） |
 //! | ② 外部句柄 | 同上 | ✅ 句柄方法 | 全能力控制：播放/seek/音量/静音/停止 + 进度与事件订阅 |
-//! | ③ 内部自建 | `erika_video().src(uri)`（组件建） | ✅ 只走 props | 纯声明式：`paused` / `volume` / `muted` / `rate` 就是全部控制面 |
+//! | ③ 内部自建 | `erika_video().src(uri)`（组件建） | ✅ 只走 props | 纯声明式：`playing` / `volume` / `muted` / `rate` 就是全部控制面 |
 //!
 //! 三个页面都是**独立组件**，所以「进入 = 建实例」「返回 = 实例销毁」。引擎的生死：
 //!
@@ -186,10 +186,12 @@ pub fn LifecyclePage() -> impl IntoElement {
     cleanup(move || eprintln!("[demo] LifecyclePage 卸载：引擎应该开始销毁"));
 
     // 句柄交给组件即完成使命（组件在挂载时认领票据）；这一页不调任何控制方法。
+    // `playing(true)` 是**固定值**：等于"初始配置"—— 不写它组件不会替你做决定（不自动播）。
     root.child(
         nsh_erika::erika_video()
             .src(src)
-            .player(player)
+            .playing(true)
+            .bind_player(player)
             .flex_1(),
     )
     .child(
@@ -354,11 +356,10 @@ pub fn ExternalPage() -> impl IntoElement {
         }
     };
 
+    // 页面自己 open + play + 挂弹幕：所以**不传 `src`**（组件不该再开一遍 —— 换片那条
+    // 路径会清掉弹幕轨），也不写 `playing`（不干预）。画面只负责显示。
     root.child(
-        nsh_erika::erika_video()
-            .src(src)
-            .player(player)
-            .flex_1(),
+        nsh_erika::erika_video_with(player).flex_1(),
     )
     .child(
         bar()
@@ -409,15 +410,16 @@ pub fn InternalPage() -> impl IntoElement {
         move || pages.back()
     };
 
-    let paused = signal(false);
+    // 打开就播：固定值之外的另一种用法 —— 绑定到信号（= 控制端）。
+    let playing = signal(true);
     let muted = signal(false);
     let volume = signal(1.0_f32);
     // 倍速在 0.5 / 1 / 1.5 / 2 之间循环
     let rate = signal(1.0_f64);
 
-    let toggle_paused = {
-        let paused = paused;
-        move || paused.update(|p| *p = !*p)
+    let toggle_playing = {
+        let playing = playing;
+        move || playing.update(|p| *p = !*p)
     };
     let toggle_muted = {
         let muted = muted;
@@ -448,7 +450,7 @@ pub fn InternalPage() -> impl IntoElement {
     root.child(
         nsh_erika::erika_video()
             .src(src)
-            .paused(move || paused.get())
+            .playing(move || playing.get())
             .muted(move || muted.get())
             .volume(move || volume.get())
             .rate(move || rate.get())
@@ -458,13 +460,13 @@ pub fn InternalPage() -> impl IntoElement {
         bar()
             .child(tap(
                 move || {
-                    if paused.get() {
-                        "播放".to_string()
-                    } else {
+                    if playing.get() {
                         "暂停".to_string()
+                    } else {
+                        "播放".to_string()
                     }
                 },
-                toggle_paused,
+                toggle_playing,
             ))
             .child(tap(|| "音量 -".to_string(), quieter))
             .child(tap(|| "音量 +".to_string(), louder))

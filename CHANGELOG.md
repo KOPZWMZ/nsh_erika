@@ -8,39 +8,52 @@
 
 ## [未发布]
 
-声明式控制：画面从"只能拿句柄调方法"变成"一块带 props 的元素"。组件自己会建引擎，
-控制项在组件层就被翻译成引擎命令（不过 JSON），原生控件只剩"画"。
+**生命周期收成一件事：引擎归组件。** 画面从"只能拿句柄调方法"变成"一块带 props 的元素"，
+同时把引擎的所有权收成一条路：组件创建/认领、组件销毁，页面拿到的句柄只有**使用权**。
+原生控件只剩"画"——它只认一个帧源号，控制项在组件层就被翻译成引擎命令（不过 JSON）。
 
 ### 变更（破坏性）
 
-- **`ErikaVideoSource` → `ErikaSession`**（`escape-hatch` 下导出）：它现在是一个**会话**
-  ——一个引擎 + 一条画面通道 + 一个身份 + 一份寿命，不只是"帧源"。
-  `ErikaPlayer::video_source()` 一并改名 `ErikaPlayer::session()`。
-- **`erika.video` 的控制面移到组件层**：`paused` / `muted` / `volume` / `rate` 现在是
-  `ErikaVideo` 的 props，由组件直接发命令。平台控件只认 `source`（帧源号）——
-  以前那句"控件不自建引擎、没有控制 prop"不再成立。
-- **内部：`Slot` 并入 `ErikaSession`**，手写引用计数（`players` / `alive`）换成**座位
-  token**（`Seat`：`Clone` 多一张票、最后一张 `Drop` 时注销注册表）。`ErikaPlayer` 不再
-  实现 `Drop`。
+- **所有权只剩一条路：守卫（`ErikaSession`）**。不可克隆、`Drop` 即"摘表 + 停引擎"。
+  `ErikaPlayer::new()` 把守卫装进句柄里的一张**所有权票据**，组件挂载时认领；
+  `ErikaPlayer::session()` 与 `ErikaPlayer::shutdown()` 删除（关机不再有第二个入口）。
+  `ErikaVideoSource` → `ErikaSession`，并从**根**导出（`escape-hatch` 下）。
+- **props 换代**（`ErikaVideo`）：
+  - `paused: bool` → `playing: Option<bool>`：**不写 = 不干预**（不会自动播）；
+  - `muted` / `volume` / `rate` 都变成 `Option`：不写 = 不干预，不再被默认值覆盖；
+  - `src: Option<String>` → `String`：空串 = 没有媒体（`&str` 字面量照常能写）；
+  - `player` → `bind_player`：它表达"把一台引擎交给画面"，不是控制项；
+    同时新增 **`erika_video_with(player)`** 构造函数（等价于 `.bind_player(..)`）。
+- **没有媒体时 `play` / `pause` / `seek` / `stop` 统一是安全的 no-op**（不报错）：
+  没有片源只是"还没有东西可做"，不是失败。`status.error` 只留给真正的失败
+  （`open` 失败、解码 / 音频错误、出帧路径不可用）。其中 `seek` 之前漏了这条 guard，
+  会往 `status.error` 写一句 `no media is open`，还会覆盖掉真正的失败。
+- **`ErikaPlayer::new()` 同步建引擎**（500ms 上限的握手），失败返回 `Err(String)`。
 
 ### 新增
 
-- **`nsh_erika::erika_video()`**（组件 `ErikaVideo`）：`erika_video().player(&player)` 用外部
-  引擎；`erika_video().src(uri)` 让组件自己异步建引擎（`open` 之后由 `paused` 决定播不播）。
-- **`ErikaVideo` 的 props**：`source` / `src` / `paused` / `muted` / `volume` / `rate`。
-  改一个就发**一条**命令；引擎晚到时挂载前的意图会补发一遍（`Intents::apply`）。
-- **`ErikaSession` 的控制面**（`pub(crate)`）：`play` / `pause` / `set_muted` /
-  `set_volume` / `set_rate` —— 内部自建和外部传入的引擎在这一层是同一种东西。
+- **`nsh_erika::erika_video()`**（组件 `ErikaVideo`）：`erika_video().src(uri).playing(true)`
+  由组件自己建引擎；`erika_video_with(player)` 用外部引擎（挂载时认领票据，卸载即销毁）。
+- **`ErikaVideo` 的 props**：`src` / `bind_player` / `playing` / `muted` / `volume` / `rate`。
+  三种写法都合法：**固定值**（初始配置）、**闭包**（控制端）、**不写**（不干预）。
+- **未绑定视图的检查**：组件自建引擎时，若注册表里还有从没被任何控件绑定过的会话，
+  打一条 info —— 多半是 `ErikaPlayer::new()` 之后忘了 `.bind_player(handle)`。
+- **`ErikaPlayer::open_if_changed`**：同一份请求（uri / 头 / 起始位置）打开过就跳过。
 
 ### 修复
 
-- **没有媒体时 `play` / `pause` / `seek` / `stop` 统一是安全的 no-op**（不报错）：
-  没有片源只是"还没有东西可做"，不是失败。`status.error` 只留给真正的失败
-  （`open` 失败、解码 / 音频错误、出帧路径不可用）—— 声明式的 `paused` prop 会在
-  `open()` 之前到达，把它当错误报等于每个纯 props 页面挂载时先报一次错，
-  还会把真正的失败（`open: No such file` 之类）覆盖掉。
-  其中 `seek` 之前漏了这条 guard，会往 `status.error` 写一句 `no media is open`。
+- **`volume` 默认值把外部句柄页静音**：随 `Option` 化消失（不写 `volume` 就不发命令）。
+- **挂载时重复 `open`**：以前 body 和 useEffect 各开一次 —— 解码器重建、
+  换片路径还会清掉弹幕轨。现在只有 effect 的第一次运行负责打开。
+- **设置类意图排在 `open` 之前**：避免首帧是满音量（声明式音量上一帧才生效）。
 - 平台层 `source` 收到 `null` 时不再解绑+告警 —— 它现在表示"号还没到"。
+
+### 待办
+
+- **组件事件**：状态 / 进度 / 播完 / 错误 —— 纯 props 路线要"读"必须靠它（下一步）。
+- **一次性动作的 props 形状**：`seek` 需要带 token 的请求对象（否则相等比较会吞掉重复请求）。
+- **意图重放**：换片 / `src` 晚到之后要不要接着播。
+- **创建期配置**（builder）：渲染后端、音频环、队列容量 —— 运行期改不了的那几项。
 
 ## [0.2.0] - 2026-11-18
 

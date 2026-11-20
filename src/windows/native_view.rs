@@ -226,7 +226,7 @@ impl NativeComponent for ErikaView {
 
     /// 平台层唯一认识的 prop：`source`（要显示的帧源号）。
     ///
-    /// 控制类 prop（`paused` / `muted` / `volume` / `rate`）在组件层就被翻译成引擎命令了，
+    /// 控制类 prop（`playing` / `muted` / `volume` / `rate`）在组件层就被翻译成引擎命令了，
     /// 不经过这里。
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
         if name != "source" {

@@ -230,7 +230,7 @@ impl ErikaPlayer {
     /// 它住在注册表里，所以会话已经销毁 / 已经摘表时返回 `None`。
     ///
     /// 一般不用它：画面直接写 [`ErikaVideo`](crate::ErikaVideo)
-    /// （`erika_video().src(uri).player(p)`）就行。要"同一个播放器在几处同时显示"（镜像）
+    /// （`erika_video_with(p)` 或 `erika_video().bind_player(p)`）就行。要"同一个播放器在几处同时显示"（镜像）
     /// 或者自己管 tick 时才需要。
     #[cfg(feature = "escape-hatch")]
     pub fn view(&self) -> Option<ViewSource> {
@@ -245,7 +245,8 @@ impl ErikaPlayer {
 
     /// 建一台引擎，并把**守卫装进句柄**。从这一行起所有方法都真的有效。
     ///
-    /// 把返回的句柄交给 [`ErikaVideo`](crate::ErikaVideo)（`.player(p)`），组件会在挂载时
+    /// 把返回的句柄交给 [`ErikaVideo`](crate::ErikaVideo)（`.bind_player(p)` 或
+    /// [`erika_video_with`](crate::erika_video_with)(p)），组件会在挂载时
     /// `adopt()` 认领守卫 —— 从此**关机权归组件**：卸载即销毁。
     ///
     /// 如果这个句柄始终没被任何组件认领，它就随最后一根 clone 一起 drop，引擎跟着关。

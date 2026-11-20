@@ -19,7 +19,7 @@
 //! |---|---|---|
 //! | `source` | number \| null | **要显示的帧源号**；`null` = "还没有号"，保持现状（不解绑、不报错） |
 //!
-//! 只有这一个 prop。它是"身份"不是"控制"：`paused` / `muted` / `volume` / `rate` 这些
+//! 只有这一个 prop。它是"身份"不是"控制"：`playing` / `muted` / `volume` / `rate` 这些
 //! prop 在组件层就被翻译成引擎命令，**根本到不了这里** —— 控件不碰播放语义。
 
 use std::rc::Rc;
@@ -67,7 +67,7 @@ impl NativeComponent for ErikaView {
 
     /// 平台层唯一认识的 prop：`source`（要显示的帧源号）。
     ///
-    /// 控制类 prop（`paused` / `muted` / `volume` / `rate`）**不经过这里** —— 它们在组件层
+    /// 控制类 prop（`playing` / `muted` / `volume` / `rate`）**不经过这里** —— 它们在组件层
     /// 就被翻译成引擎命令了。控件只回答"显示谁的帧"，别的什么都不管。
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
         match name {

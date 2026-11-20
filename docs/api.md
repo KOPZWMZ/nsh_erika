@@ -1,8 +1,12 @@
 # API 用法
 
 库对外的全部东西就三块：**一个句柄**（`ErikaPlayer`）、**一块画面**（`erika_video()`）、
-**两个附加句柄**（弹幕 / 字幕）。控件的 prop 表只有 `source`，所以控制面永远是函数调用，
-不需要命令、事件或回调链。
+**两个附加句柄**（弹幕 / 字幕）。**原生控件**的 prop 表只有 `source`（帧源号）；
+控制面有两条路：句柄方法（全能力），或者画面元素自己的 props（`src` / `playing` /
+`volume` / `muted` / `rate`，引擎由组件建、也由组件销毁）。
+
+谁负责关机只有一条规则：**引擎归组件**。组件创建或认领引擎，卸载即销毁 ——
+页面拿到的句柄只有"使用权"（见「生命周期与线程」）。
 
 ```rust
 use nsh_core::prelude::*;
@@ -14,7 +18,7 @@ player.play();                                  // ③ 播
 view()
     .flex_col()
     .flex_1()
-    .child(nsh_erika::erika_video().player(&player).flex_1())  // ④ 画面
+    .child(nsh_erika::erika_video().bind_player(player.clone()).flex_1())  // ④ 画面（组件接管引擎）
     .child(/* 你自己的控制条，直接调 player */)
 ```
 
@@ -27,7 +31,7 @@ view()
 
 | 你要的东西 | 路径 |
 |---|---|
-| 播放器 / 画面 / 注册 / 控件名 | `nsh_erika::{ErikaPlayer, erika_video, register, COMPONENT_NAME, PlatformComponents}` |
+| 播放器 / 画面 / 注册 / 控件名 | `nsh_erika::{ErikaPlayer, erika_video, erika_video_with, register, COMPONENT_NAME, PlatformComponents}` |
 | 打开媒体的请求、播放状态 | `nsh_erika::{MediaRequest, PlayerState}`（高频，特意留在根上） |
 | 弹幕：句柄 + 快照 + 五组样式 | `nsh_erika::danmaku::*` |
 | 字幕：句柄 + 快照 + 外观 / 版面 / 延迟 | `nsh_erika::subtitle::*` |
@@ -56,8 +60,9 @@ nsh-erika = { path = "…", features = ["escape-hatch"] }
 
 | 打开后多出什么 | 用来干什么 |
 |---|---|
-| `video::{ErikaSession, FrameImage, FrameRequest}`（外加平台的 `DmabufFrame` / `SharedTexture`） | 自己写平台控件、或做出帧自检（`request_frame` + `frame_snapshot`）|
-| `ErikaPlayer::session()` | 拿会话句柄 —— 上面那些类型的唯一入口 |
+| `ErikaSession`（**根**上） | 自己建引擎、自己负责关机：`ErikaSession::create()` → `session.player()` 借一个**无票**句柄。集成测试 / 无头脚本 / 出帧自检用它 |
+| `ErikaPlayer::view()` | 帧源本体（`ViewSource`）：`request_frame` + `frame_snapshot`，自写控件或出帧自检用 |
+| `video::{FrameImage, FrameRequest}`（外加平台的 `DmabufFrame` / `SharedTexture`） | 上面那条路的载荷类型 |
 | `ErikaPlayer::call()` / `call_with()` | 在引擎线程上跑 presenter 独有能力：超分 / HDR / 截图 / HUD，以及还没封装的上游 getter |
 | `ErikaPlayer::raw()` | 裸 `erika::Player`。⚠️ 它的**写方法全部绕过 presenter 的音频协调**（实测：直连 `set_playback_rate` 画面变快声音不变）—— 只用来读 |
 | `danmaku::ErikaDanmaku::update_config()` / `danmaku::DanmakuLayoutConfig` | 上游**整包**样式的写侧（24 字段）。未成组的字段（`scroll_duration_seconds` / `custom_font_face_index` …）只能走它；日常改样式用五组类型化视图。**读**整包也走逃生舱：`player.call_with(\|p\| p.danmaku_config().cloned())` —— 快照里不再放第二份 |
@@ -66,7 +71,8 @@ nsh-erika = { path = "…", features = ["escape-hatch"] }
 不承诺"：上游类型照样能从 `nsh_erika::erika::…` 摸到，我们自己的那几个（`ErikaSession`
 等）才真的不导出。
 
-对 99% 的应用来说，正确的做法一直是 `erika_video().player(&player)` —— 那条路不需要这个 feature。
+对 99% 的应用来说，正确的做法一直是 `erika_video_with(player)`（= `erika_video().bind_player(player)`）
+—— 那条路不需要这个 feature。
 
 ---
 
@@ -78,11 +84,14 @@ nsh-erika = { path = "…", features = ["escape-hatch"] }
 | `danmaku::ErikaDanmaku` | `player.danmaku()` | 弹幕开关、轨道、样式、偏移 |
 | `subtitle::ErikaSubtitle` | `player.subtitle()` | 字幕样式、位置、延迟 |
 | `tracks::ErikaTracks` | `player.tracks()` | 轨道列表与选择、外挂字幕 |
-| `video::ErikaSession` | `player.session()` | **逃**：会话（帧槽 + `request_frame` + 基础控制）。一般不用，直接写 `erika_video().player(&player)` |
+| `ErikaSession`（**逃**，根上） | `ErikaSession::create()` | 引擎的**唯一所有者**（不可克隆，`Drop` 即关机）。有画面时它归 `ErikaVideo`，正常用法拿不到 |
 
-`ErikaPlayer` 很便宜可以随便 clone：`Clone` = 两次引用计数加一；`PartialEq` 按身份
-（`Arc::ptr_eq`）比较，所以能直接塞 `signal()`（信号是 `Copy`，闭包捕获它就不用每个闭包
+`ErikaPlayer` 很便宜可以随便 clone：`Clone` = 几次引用计数加一；`PartialEq` 比**号**
+（号单调递增、永不复用），所以能直接塞 `signal()`（信号是 `Copy`，闭包捕获它就不用每个闭包
 都写一次 `clone()`）。
+
+⚠️ **句柄不是所有者**：把句柄交给组件后，关机权就在组件手里了。卸载之后再留着 clone 也没用 ——
+命令静默失败、读侧冻结在最后一帧，`status().error` 是 `"engine thread is gone"`。
 
 ```rust
 let player = signal(player);                       // Signal<ErikaPlayer>，Copy
@@ -114,16 +123,26 @@ fn components_windows(components: &PlatformComponents) { nsh_erika::register(com
 ## 显示
 
 ```rust
-nsh_erika::erika_video().player(&player)   // 或 player.clone()（参数是 impl Borrow<ErikaPlayer>）
-    .flex_1()                          // 返回的是普通 NSH 元素，样式照常链式调用
+// ① 只用 props：组件自己建引擎、自己关机
+nsh_erika::erika_video().src(uri).playing(true).volume(0.8)
+
+// ② 要句柄控制：把句柄交出去，组件挂载时认领它
+nsh_erika::erika_video_with(player.clone())   // = erika_video().bind_player(player.clone())
 ```
 
-它内部把句柄换成一个号、生成 `native("erika.video")` 元素、把号挂到 `source` prop 上。
-手写也可以（一般不需要）：
+- `bind_player` 的参数是 `impl Into<Prop<Option<ErikaPlayer>>>`：给 `player` 或 `player.clone()` 都行，
+  **`&player` 不行**。
+- 返回的是普通 NSH 元素，`.flex_1()` 之类的样式照常链式调用。
+- 组件内部把句柄换成一个号、生成 `native("erika.video")` 元素、把号挂到 `source` prop 上。
+  **手写 `native(...)` 走不通**：号是 `pub(crate)` 的，`erika_video()` 是唯一入口。
 
-```rust
-native(nsh_erika::COMPONENT_NAME).prop("source", player.session().id())
-```
+**props 的三种写法**（`src` / `bind_player` / `playing` / `muted` / `volume` / `rate`）：
+
+| 写法 | 含义 |
+|---|---|
+| 固定值（`.playing(true)` / `.volume(0.8)`） | 初始配置：挂载时应用一次 |
+| 闭包（`.playing(move \|\| want.get())`） | 控制端：读到变化就发一条命令 |
+| 不写 | 不干预：用引擎默认值（`playing` 不写**不会自动播**） |
 
 **画面比例**：控件按视频宽高比内接并居中，多出来的留黑（等价 `ContentFit::Contain`）。
 画面尺寸由控件自己按「控件尺寸 × DPI」算，跟随窗口 resize 与 DPI 变化自动重挂出图面。
@@ -280,24 +299,33 @@ player.tracks().remove_subtitle(track_id);
 
 ## 生命周期与线程
 
+**一条规则：引擎归组件。** 组件创建或认领引擎，卸载即销毁；页面拿到的句柄只有使用权。
+
+| 用法 | 引擎谁建 | 控制 | 关机 |
+|---|---|---|---|
+| `erika_video().src(uri)`（纯 props） | 组件（挂载时同步建） | 只能 props | 组件 |
+| `ErikaPlayer::new()` + `erika_video_with(p)` | 页面（`new()` 那一刻） | 句柄全能力 | 组件（挂载时**认领票据**后） |
+| `ErikaSession::create()` + `session.player()`（**逃生舱**） | 你自己 | 借用句柄 | 你自己（守卫 `Drop`） |
+
+"认领"就是 `ErikaPlayer::new()` 在句柄里放的那张**所有权票据**：组件挂载时取走它、放进自己的
+owner。所以：**卸载 = 关机**（摘表 + `engine.stop()`）；没人认领的票据随最后一根 clone drop；
+同一个句柄挂两次（镜像）时第二次只按同一个号显示；卸载之后句柄的 clone 也不再能让引擎活过来。
+
 | 档 | 内容 | 何时建 / 收 |
 |---|---|---|
-| **页面级（会话级）** | `ErikaPlayer` + 引擎线程 + GPU 设备 + 音频输出 + 解码线程 + libass | 你 `new()` 时建；**最后一个句柄 drop 时全收** |
+| 会话级 | 引擎线程 + GPU 设备 + 音频输出 + 解码线程 + libass | 组件挂载（或 `new()`）时建；**组件卸载**时收 |
 | 媒体级 | demux / 解码 / preroll | `open()` 起；`stop()` 保持打开；换片重建 |
 | 进程级 | 会话注册表（空表时什么都不留） | 应用期 |
 
-- **"最后一个句柄"指 app 的 `ErikaPlayer`**（每个句柄一张"座位"）。视图自己持着会话，所以删掉控件 ≠ 引擎退出，
-  句柄 `drop` 才是。
-- 想在退出进程前**确定地**收干净：`player.shutdown()` —— 它会等引擎线程把 `PresenterRuntime`
-  （GPU 设备 / 解码器 / libass / 字体库）析构完（最多 5 秒，超时打 warn 放弃）。不调也行，
-  最后一个句柄 drop 时走同一套等待，只是时机不可控。
-- `shutdown()` 之后这个玩家就废了（命令静默失败、`status` 报错），要再播只能重新 `new()`。
+- **没有 `shutdown()`**：关机只有一个入口（守卫 `Drop`）。`engine.stop()` 是**协作式取消**
+  （不 join），所以"卸载返回"≠"GPU 设备已析构"；要确认真的干净就看线程数
+  （示例首页那个读数就是这么用的）。
 - 线程名：`erika-engine` / `erika-demux` / `erika-playback` / `erika-danmaku` / `erika-audio`。
-  退出后 `ps -T` 一个都不剩，是最直接的验收。
+- 想在**退出进程前**确定地收干净：先卸载画面，再确认线程都退了（`examples/drop_probe.rs`
+  就是压这条的探针）。别在引擎还在析构时直接 `exit`。
 
-页面级就够了：离开播放页 → `ErikaPlayer` 被 drop → 解码线程和 GPU 设备一起没。
-只有当你要**离开播放页还继续出声出画**（后台播放 / 画中画 / 迷你播放器）时，才需要把
-`ErikaPlayer` 抬到应用级。
+页面级就够了：离开播放页 → 组件卸载 → 引擎跟着没。只有当你要**离开播放页还继续出声出画**
+（后台播放 / 画中画 / 迷你播放器）时，才需要把画面元素和句柄抬到应用级常驻。
 
 ---
 

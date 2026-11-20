@@ -26,15 +26,15 @@
 
 ```toml
 [dependencies]
-nsh-core = "0.5.1"
-nsh-base = "0.5.1"                    
+nsh-core = "0.6"
+nsh-base = "0.6"                    
 nsh-erika = { git = "https://github.com/KOPZWMZ/nsh_erika", tag = "v0.2.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { version = "0.5.1", default-features = false }
+nsh-platform-linux = { version = "0.6", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-nsh-platform-windows = { version = "0.5.1", default-features = false }
+nsh-platform-windows = { version = "0.6", default-features = false }
 
 # Linux 必需：erika 的 Vulkan 直接导入要补丁版 wgpu-hal，而 Cargo **不会**把依赖仓库里的
 # [patch] 传下来 —— 每个外部 workspace 都得自己写一份。两个 tag 必须一致。
@@ -81,19 +81,28 @@ let player = nsh_erika::ErikaPlayer::new().expect("引擎起不来");
 player.open(nsh_erika::MediaRequest::new("/path/to/video.mkv"));
 player.play();
 
-// 画面 + 你自己画的控制条
+// 画面 + 你自己画的控制条（句柄交给组件：挂载时认领引擎，卸载即销毁）
 view()
     .flex_col()
     .flex_1()
-    .child(nsh_erika::erika_video().player(&player).flex_1())
+    .child(nsh_erika::erika_video_with(player.clone()).flex_1())
     .child(button().on_press({
         let player = player.clone();
         move || player.pause()
     }).child(text("暂停")))
 ```
 
-**路径**：根上只有"每个 app 都要手写"的几个（`ErikaPlayer` / `erika_video` / `register` /
-`COMPONENT_NAME` / `PlatformComponents` / `MediaRequest` / `PlayerState`）；其余按关注点分模块：
+**不想拿句柄？** 画面元素自己也能控制，引擎由组件建、也由组件销毁：
+
+```rust
+// 固定值 = 初始配置；也可以写成闭包跟踪信号（= 控制端）
+nsh_erika::erika_video().src(uri).playing(true).volume(0.8)
+```
+
+`playing` / `muted` / `volume` / `rate` 不写 = **不干预**（用引擎默认值，`playing` 不写不会自动播）。
+
+**路径**：根上只有"每个 app 都要手写"的几个（`ErikaPlayer` / `erika_video` / `erika_video_with` /
+`register` / `COMPONENT_NAME` / `PlatformComponents` / `MediaRequest` / `PlayerState`）；其余按关注点分模块：
 `danmaku::` `subtitle::` `tracks::` `state::` `events::` `video::`（`video` 是逃生舱，需要
 `escape-hatch` feature）。上游类型走
 `nsh_erika::erika::…`（**别再自己依赖 liberika**，git rev 对不齐就是两套类型）。
