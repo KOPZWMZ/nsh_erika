@@ -225,8 +225,13 @@ pub mod state {
     pub use ::erika::TrackSelection;
 }
 
-/// 事件流：上游离散事件的转发 + 三条订阅出口。
+/// 事件流。两套：句柄侧的 [`ErikaEvent`](crate::events::ErikaEvent)（上游离散事件的转发 +
+/// 三条订阅出口），组件侧的 [`VideoEvent`](crate::events::VideoEvent)（无句柄页面也能收到
+/// 状态 / 进度 / 播完 / 错误）。
 pub mod events {
+    pub use crate::component::events::{
+        SelectedTracks, VideoEvent, VideoProgress, VideoState, VideoTrack, VideoTrackKind,
+    };
     pub use crate::core::listener::{
         ErikaEvent, ErikaEventsListener, ErikaListener, ErikaProgressListener, ErikaStatusListener,
     };
@@ -254,7 +259,7 @@ pub use ::erika::MediaRequest;
 /// 播放状态机的 8 个态。上游类型，根上留一份高频的（`match` 事件时天天写）。
 pub use ::erika::PlayerState;
 pub use component::{
-    ErikaVideo, ErikaVideoElement, erika_video, erika_video_with, props::ErikaVideoProps,
+    ErikaVideo, ErikaVideoElement, ErikaVideoProps, erika_video, erika_video_with,
 };
 pub use core::player::ErikaPlayer;
 /// 会话守卫：**引擎的唯一所有者**，`Drop` 即关机。**只在 `escape-hatch` 下导出。**

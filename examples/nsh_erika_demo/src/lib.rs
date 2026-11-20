@@ -7,7 +7,7 @@
 //! |---|---|---|---|
 //! | ① 生命周期 | `ErikaPlayer::new()`（页面建） | ❌ 只有「返回」 | **进出页面 = 建/销引擎**（首页有线程数读数） |
 //! | ② 外部句柄 | 同上 | ✅ 句柄方法 | 全能力控制：播放/seek/音量/静音/停止 + 进度与事件订阅 |
-//! | ③ 内部自建 | `erika_video().src(uri)`（组件建） | ✅ 只走 props | 纯声明式：`playing` / `volume` / `muted` / `rate` 就是全部控制面 |
+//! | ③ 内部自建 | `erika_video().src(uri)`（组件建） | ✅ 只走 props | 纯声明式：`playing` / `volume` / `muted` / `rate` 控制 + `on_progress` / `on_ended` 读回 |
 //!
 //! 三个页面都是**独立组件**，所以「进入 = 建实例」「返回 = 实例销毁」。引擎的生死：
 //!
@@ -412,6 +412,10 @@ pub fn InternalPage() -> impl IntoElement {
 
     // 打开就播：固定值之外的另一种用法 —— 绑定到信号（= 控制端）。
     let playing = signal(true);
+    // 读侧：**没有句柄**，全靠组件事件（`on_progress` / `on_ended`）。
+    let position = signal(Duration::ZERO);
+    let duration = signal(Option::<Duration>::None);
+    let ended = signal(false);
     let muted = signal(false);
     let volume = signal(1.0_f32);
     // 倍速在 0.5 / 1 / 1.5 / 2 之间循环
@@ -454,6 +458,11 @@ pub fn InternalPage() -> impl IntoElement {
             .muted(move || muted.get())
             .volume(move || volume.get())
             .rate(move || rate.get())
+            .on_progress(move |progress: &nsh_erika::events::VideoProgress| {
+                position.set(Duration::from_millis(progress.position_ms));
+                duration.set(progress.duration_ms.map(Duration::from_millis));
+            })
+            .on_ended(move || ended.set(true))
             .flex_1(),
     )
     .child(
@@ -483,8 +492,19 @@ pub fn InternalPage() -> impl IntoElement {
             .child(tap(move || format!("倍速 {:.1}x", rate.get()), cycle_rate))
             .child(tap(|| "← 返回（销毁引擎）".to_string(), back))
             .child(
-                text("引擎归组件：这一页没有句柄，控制全靠 props")
-                    .text_color(move || theme().muted_foreground),
+                text(move || {
+                    let total = duration
+                        .get()
+                        .map(|duration| clock(duration.as_secs_f64()))
+                        .unwrap_or_else(|| "--:--".to_string());
+                    let line = format!("{} / {}", clock(position.get().as_secs_f64()), total);
+                    if ended.get() {
+                        format!("{line}   播完了")
+                    } else {
+                        line
+                    }
+                })
+                .text_color(move || theme().muted_foreground),
             ),
     )
 }

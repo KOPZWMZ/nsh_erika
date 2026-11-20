@@ -5,7 +5,10 @@ use nsh_core::prelude::*;
 use crate::COMPONENT_NAME;
 use crate::ErikaPlayer;
 use crate::SessionOwner;
-pub(super) mod props;
+pub(crate) mod events;
+pub use events::VideoEvent;
+mod props;
+pub use props::ErikaVideoProps;
 /// 一块播放器的画面。**引擎的生死由它负责**。
 ///
 /// ```ignore
@@ -25,7 +28,7 @@ pub(super) mod props;
 ///
 /// 卸载即销毁：组件没了，引擎就没（守卫那一份只在组件手里）。
 #[component]
-pub fn ErikaVideo(props: props::ErikaVideoProps) -> impl IntoElement {
+pub fn ErikaVideo(props: ErikaVideoProps, cx: Scope<VideoEvent>) -> impl IntoElement {
     let given = props.bind_player.get_untracked();
 
     let (owned, player) = match given {
@@ -59,6 +62,7 @@ pub fn ErikaVideo(props: props::ErikaVideoProps) -> impl IntoElement {
     };
     let _keep = owned.map(stored);
     check_unbound(&player);
+    events::wire(&player, cx);
     props.apply(&player);
 
     // 号在这个组件的整个生命里是**常量**（一个组件 = 一个引擎），所以直接写常量，
