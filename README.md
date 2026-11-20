@@ -1,24 +1,21 @@
 # nsh-erika
 
 > Native video for [Native Shell](https://nsh.dev): the *erika* playback core bridged into the
-> `erika.video` native component — zero-copy GPU handoff on Linux (linear dma-buf) and
-> Windows (D3D11 shared texture), with hardware decode, libass subtitles and danmaku.
+> `erika.video` native component — zero-copy GPU handoff, hardware decode, libass subtitles, danmaku.
 
 [NSH](https://nsh.dev) 的原生视频控件 `erika.video`：把 [liberika](https://github.com/AimesSoft/liberika)
 （erika 播放内核）的画面接进 NSH 的界面树。
 
-- **这是播放内核的桥，不是播放器。** 没有播放列表、没有进度条、没有 UI。它提供
-  `ErikaPlayer`（控制与状态）+ 一块显示画面的控件，控制条由调用者用自己的 NSH 元素画。
-- **画面零 CPU 回读**：Linux 走线性 dma-buf → `GdkDmabufTexture`；Windows 走 D3D11
-  共享纹理 → `OpenSharedResource` → D2D `DrawBitmap`。两条路都不经过内存拷贝。
-- **控件只认一个数字**（帧源号），所以引擎放在哪儿都行、控件可以随页面生灭。
-- 解码 / 同步 / 字幕（libass）/ 弹幕 / 音频全在 erika：硬解、A/V 同步、色彩、FSR 超分都不需要你写。
+## 简介
 
-| 平台 | 出帧路径 | 状态 |
-| --- | --- | --- |
-| **Linux** | erika 导出线性 dma-buf → GDK 直接导入 → GSK 当纹理采样 | ✅ 跑通（VA-API 直通硬解 + 弹幕 + 字幕） |
-| **Windows** | erika 发布 `MISC_SHARED` 快照 → `OpenSharedResource` → D2D `DrawBitmap` | ✅ 跑通（D3D11VA 硬解 + 弹幕 + 字幕） |
-| macOS / Android | — | 未做（编译期 `compile_error!` 挡住） |
+- **这是播放内核的桥，不是播放器**：没有播放列表、没有进度条、没有 UI，控制条由调用者用自己的
+  NSH 元素画。解码 / 同步 / 字幕（libass）/ 弹幕 / 音频全在 erika。
+- **画面零 CPU 回读**：Linux 走线性 dma-buf → `GdkDmabufTexture`；Windows 走 D3D11 共享纹理 →
+  `OpenSharedResource` → D2D `DrawBitmap`。
+- **两条路线**：
+  - `erika_video()` —— 引擎由组件建、也由组件销毁；控制走 props / 事件 / 命令。
+  - `erika_video_for(player)` —— 页面建引擎，组件认领所有权并显示；句柄拥有全能力。
+- 原生控件只认一个数字（帧源号），所以引擎放在哪儿都行，画面可以随页面生灭。
 
 ## 快速开始
 
@@ -27,7 +24,7 @@
 ```toml
 [dependencies]
 nsh-core = "0.6"
-nsh-base = "0.6"                    
+nsh-base = "0.6"
 nsh-erika = { git = "https://github.com/KOPZWMZ/nsh_erika", tag = "v0.3.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -36,31 +33,22 @@ nsh-platform-linux = { version = "0.6", default-features = false }
 [target.'cfg(target_os = "windows")'.dependencies]
 nsh-platform-windows = { version = "0.6", default-features = false }
 
-# Linux 必需：erika 的 Vulkan 直接导入要补丁版 wgpu-hal，而 Cargo **不会**把依赖仓库里的
+# Linux 必需：erika 的 Vulkan 直接导入要补丁版 wgpu-hal，而 Cargo 不会把依赖仓库里的
 # [patch] 传下来 —— 每个外部 workspace 都得自己写一份。两个 tag 必须一致。
 [patch.crates-io]
 wgpu-hal = { git = "https://github.com/AimesSoft/liberika", tag = "v0.3.7" }
 ```
 
-⚠️ **先别急着 `cargo build`** —— erika 要一些本地原生依赖，两个平台的备法完全不同：
-
-- Linux → [docs/linux.md](docs/linux.md)
-  - `wgpu-hal` 补丁 = 上面那段（写在清单里，**不要**用 `.cargo/config.toml` 的 `paths`）
-  - 补丁版 `libass` = `bash scripts/prepare-linux-deps.sh` 一键（细节见该文档 §2.2）
-- Windows → [docs/windows.md](docs/windows.md)（工具链 + 在 liberika 的 cargo checkout 里跑 `xtask deps build`；
-  那段的 `[patch]` 在 Windows 上用不到，但无害）
-
-另外：**用 `nsh run`（而不是 `cargo run`）时，`[patch]` 不生效** —— nsh 0.5.0 生成的
-`.nsh/rust/Cargo.toml` 才是 workspace 根，应用 manifest 里的 `[patch]` 会被忽略。这时还要在
-`.cargo/config.toml` 里加一条 `paths = [".vendor/wgpu-hal"]`（脚本会写）。细节见
-[docs/linux.md §2.1](docs/linux.md)。
+⚠️ **先别急着 `cargo build`** —— erika 还要本地原生依赖，两个平台的备法完全不同：
+Linux 见 [docs/linux.md](docs/linux.md)（`bash scripts/prepare-linux-deps.sh` 一键备齐），
+Windows 见 [docs/windows.md](docs/windows.md)。
 
 ### 2. 注册控件（**应用 crate 的根**）
 
 ```rust
 use nsh_erika::PlatformComponents;
 
-// `#[native_components(<平台>)]` 自己会加 cfg，所以两个函数平铺写就行，不用包 cfg。
+// `#[native_components(<平台>)]` 自己会加 cfg，所以两个函数平铺写就行。
 #[native_components(linux)]
 fn components_linux(components: &PlatformComponents) {
     nsh_erika::register(components);
@@ -77,11 +65,11 @@ fn components_windows(components: &PlatformComponents) {
 ```rust
 use nsh_core::prelude::*;
 
+// 句柄路线：页面建引擎，组件认领所有权并显示（卸载即销毁）
 let player = nsh_erika::ErikaPlayer::new().expect("引擎起不来");
 player.open(nsh_erika::MediaRequest::new("/path/to/video.mkv"));
 player.play();
 
-// 画面 + 你自己画的控制条（句柄交给组件：挂载时认领引擎，卸载即销毁）
 view()
     .flex_col()
     .flex_1()
@@ -92,58 +80,36 @@ view()
     }).child(text("暂停")))
 ```
 
-**不想拿句柄？** 画面元素自己也能控制，引擎由组件建、也由组件销毁：
-
 ```rust
-// 固定值 = 初始配置；也可以写成闭包跟踪信号（= 控制端）
+// 简化路线：引擎由组件建、也由组件销毁；控制走 props / 事件 / 命令
 nsh_erika::erika_video().src(uri).playing(true).volume(0.8)
 ```
 
-`playing` / `muted` / `volume` / `rate` 不写 = **不干预**（用引擎默认值，`playing` 不写不会自动播）。
+`playing` / `muted` / `volume` / `rate` **不写 = 不干预**（`playing` 不写不会自动播）。
 
-**路径**：根上只有"每个 app 都要手写"的几个（`ErikaPlayer` / `erika_video` / `erika_video_for` /
-`register` / `COMPONENT_NAME` / `PlatformComponents` / `MediaRequest` / `PlayerState`）；其余按关注点分模块：
-`danmaku::` `subtitle::` `tracks::` `state::` `events::` `video::`（`video` 是逃生舱，需要
-`escape-hatch` feature）。上游类型走
-`nsh_erika::erika::…`（**别再自己依赖 liberika**，git rev 对不齐就是两套类型）。
-详见 [docs/api.md](docs/api.md#路径从哪儿-import)。
-
-完整可跑的版本（播放/暂停、±10s、音量、静音、停止、状态行）见
+完整 API 见 [docs/api.md](docs/api.md)，可跑的完整示例见
 [`examples/nsh_erika_demo`](examples/nsh_erika_demo)。
 
-## 示例
+## 重点注意
 
-```sh
-cd examples/nsh_erika_demo
-TEST_VIDEO=/path/to/video.mkv nsh run     # 或：cargo run
-```
+- **不要把画面放进会重跑的区域**（`when` / `dynamic` / 列表）：区域重跑 = 组件重建 = **新引擎**。
+- **props 不写 = 不干预**：`playing` / `muted` / `volume` / `rate` 都是如此，默认值由引擎给。
+- **`nsh run` 时 manifest 里的 `[patch]` 不生效**：nsh 生成的 manifest 才是 workspace 根，
+  要在 `.cargo/config.toml` 里加 `paths = [".vendor/wgpu-hal"]`（脚本会写）。
+- **上游类型只从 `nsh_erika::erika` 拿**：别在 `Cargo.toml` 里再依赖 liberika，git rev 对不齐
+  就是两个 crate、两套类型。
+- **出帧不可用只上报、不降级**：原因写进 `player.status().error` / `simple::VideoEvent::Error`，
+  要不要换实现由调用者决定。
 
-| 环境变量 | 作用 | 默认 |
+## 适配平台
+
+| 平台 | 出帧路径 | 状态 |
 | --- | --- | --- |
-| `TEST_VIDEO` | 片源路径 | `../../media/tiny.mkv` |
-| `TEST_DANMAKU` | 弹幕轨道；`off` = 不挂弹幕 | `../../media/danmaku.json` |
-| `NSH_ERIKA_TRACE=1` | 打 `engine tick` / `tick ≈ paint ≈ frames` 探针 | 关 |
-| `NSH_PLAYER_BUILTIN=1` | 换成 NSH 内置 `<video>`（GStreamer）**做性能对照** | 关 |
-| `RUST_LOG=nsh_erika=info` | 控件的启动/出帧日志 | 关 |
+| **Linux** | erika 导出线性 dma-buf → GDK 直接导入 → GSK 当纹理采样 | ✅ 跑通（VA-API 硬解 + 弹幕 + 字幕） |
+| **Windows** | erika 发布 `MISC_SHARED` 快照 → `OpenSharedResource` → D2D `DrawBitmap` | ✅ 跑通（D3D11VA 硬解 + 弹幕 + 字幕） |
+| macOS / Android | — | 未做（编译期 `compile_error!` 挡住） |
 
-## 文档
-
-| 文件 | 内容 |
-| --- | --- |
-| [docs/api.md](docs/api.md) | 控制面、状态读取、弹幕/字幕、生命周期、失败语义、平台差异 |
-| [docs/linux.md](docs/linux.md) | Linux 依赖准备、构建、验证、已知限制 |
-| [docs/windows.md](docs/windows.md) | Windows 依赖准备、构建、验证、排查、已知限制 |
-
-## 已知限制
-
-| 限制 | 影响 | 备注 |
-| --- | --- | --- |
-| Windows 每帧一次 `CopyResource` + 一次 GPU 同步等待 | 4K 高帧率时的成本大头 | 上游 legacy `MISC_SHARED` 句柄没有 fence/keystate 原语，生产者只能等完再交 |
-| Windows 输出钉死 SDR | HDR 片源会被 tone-map | 想保留 HDR 要上游动渲染管线 |
-| Windows 每帧新纹理 + 每帧 `OpenSharedResource` | 分配器压力 | 由上游池化解决 |
-| Linux 需要两个**补丁前置**（wgpu-hal、libass） | 外部消费者必须自己备 | 见 [docs/linux.md](docs/linux.md)，一步脚本 |
-| 弹幕与视频同在一张纹理 | 出帧频率 = max(视频帧率, 弹幕平滑度) | 弹幕流畅时视频会重复合成；分层导出要上游改动 |
-| 4K 高帧率未实测 | — | 这是唯一可能改动路线的未知数 |
+已知限制见 [docs/api.md](docs/api.md#已知限制)。
 
 ## 开发
 
@@ -153,21 +119,9 @@ cargo test --doc                     # 文档示例
 bash scripts/test-integration.sh     # 集成测试（需要 GPU + /dev/dri）
 ```
 
-## 更新记录
+## 许可证
 
-每个版本的对外变更见 [CHANGELOG.md](CHANGELOG.md)（破坏性变更写在最前面）。
+**MIT OR Apache-2.0** 双许可，任选其一：[LICENSE-MIT](LICENSE-MIT) / [LICENSE-APACHE](LICENSE-APACHE)。
 
-## 许可
-
-本仓库以 **MIT OR Apache-2.0** 双许可发布，任选其一：
-
-- [LICENSE-MIT](LICENSE-MIT)
-- [LICENSE-APACHE](LICENSE-APACHE)
-
-依赖的播放内核 [liberika](https://github.com/AimesSoft/liberika) 有自己的许可。
-只使用本仓库的源码不产生额外义务；**分发带 erika 的二进制**时要满足它和
-LGPL FFmpeg 的要求。
-
-## 致谢
-
-播放内核是 [liberika](https://github.com/AimesSoft/liberika)。这个仓库只做 NSH 侧的桥接。
+播放内核 [liberika](https://github.com/AimesSoft/liberika) 有自己的许可；**分发带 erika 的二进制**
+时要同时满足它和 LGPL FFmpeg 的要求。各版本的对外变更见 [CHANGELOG.md](CHANGELOG.md)。

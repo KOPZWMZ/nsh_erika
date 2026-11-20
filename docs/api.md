@@ -380,3 +380,14 @@ owner。所以：**卸载 = 关机**（摘表 + `engine.stop()`）；没人认�
 | 硬解 | VA-API 直通 | D3D11VA |
 
 调用方看到的 API 两边完全一致，差异只在成本与内部机制上。
+
+## 已知限制
+
+| 限制 | 影响 | 备注 |
+|---|---|---|
+| Windows 每帧一次 `CopyResource` + 一次 GPU 同步等待 | 4K 高帧率时的成本大头 | 上游 legacy `MISC_SHARED` 句柄没有 fence/keystate 原语，生产者只能等完再交 |
+| Windows 输出钉死 SDR | HDR 片源会被 tone-map | 想保留 HDR 要上游动渲染管线 |
+| Windows 每帧新纹理 + 每帧 `OpenSharedResource` | 分配器压力 | 由上游池化解决 |
+| Linux 需要两个**补丁前置**（wgpu-hal、libass） | 外部消费者必须自己备 | 见 [linux.md](linux.md)，一步脚本 |
+| 弹幕与视频同在一张纹理 | 出帧频率 = max(视频帧率, 弹幕平滑度) | 弹幕流畅时视频会重复合成；分层导出要上游改动 |
+| 4K 高帧率未实测 | — | 这是唯一可能改动路线的未知数 |
