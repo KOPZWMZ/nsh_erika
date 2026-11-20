@@ -6,11 +6,17 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)：每版分「新增 / 变更
 （破坏性）/ 修复 / 文档」几节，破坏性的写在最显眼的位置。
 
-## [未发布]
+## [0.3.0] - 2026-11-20
 
-**生命周期收成一件事：引擎归组件。** 画面从"只能拿句柄调方法"变成"一块带 props 的元素"，
-同时把引擎的所有权收成一条路：组件创建/认领、组件销毁，页面拿到的句柄只有**使用权**。
-原生控件只剩"画"——它只认一个帧源号，控制项在组件层就被翻译成引擎命令（不过 JSON）。
+**两条路线定稿 + 生命周期收成一条。** 画面从"只能拿句柄调方法"变成"一块带 props 的元素"，
+同时把所有权的归属收成一条路：组件创建/认领引擎、组件销毁，页面拿到的句柄只有**使用权**。
+
+对外的接口从此只有三样东西：**状态**（props）、**事件**（`on_*`）、**命令**（`command`）。
+
+- **简化模式**（不要句柄）：`erika_video().src(uri).playing(true)` —— 引擎由组件建、由组件销毁；
+  读靠 `on_progress` / `on_ended` / …，动作靠 `command`。
+- **句柄模式**（要全能力）：`ErikaPlayer::new()` + `erika_video_for(player)` —— 句柄负责控制，
+  组件负责认领和显示。
 
 ### 变更（破坏性）
 
@@ -21,9 +27,15 @@
 - **props 换代**（`ErikaVideo`）：
   - `paused: bool` → `playing: Option<bool>`：**不写 = 不干预**（不会自动播）；
   - `muted` / `volume` / `rate` 都变成 `Option`：不写 = 不干预，不再被默认值覆盖；
-  - `src: Option<String>` → `String`：空串 = 没有媒体（`&str` 字面量照常能写）；
-  - `player` → `bind_player`：它表达"把一台引擎交给画面"，不是控制项；
-    同时新增 **`erika_video_with(player)`** 构造函数（等价于 `.bind_player(..)`）。
+  - `src: Option<String>` → **`MediaSource`**（`MediaRequest` 的薄包装）：`.src(..)` 仍然接受
+    `&str` / `String`，但这下能带上 HTTP 头（鉴权 / Cookie）和起始位置（续播）；
+    空 uri = 没有媒体。包装是必须的 —— `JsValue` 是 nsh-core 的 trait、`MediaRequest` 是上游类型，
+    孤儿规则不允许直接给它补 impl；
+  - `player` → `bind_player`：它表达"把一台引擎交给画面"，不是控制项。
+- **导出面重排**：两个构造器都在**根**上 —— `erika_video()`（简化）/ `erika_video_for(player)`
+  （句柄，等价于 `.bind_player(..)`）；`ErikaVideo` / `ErikaVideoProps` / `ErikaVideoElement`
+  也在根上。简化模式**独有的数据结构**收进 `nsh_erika::simple`（`MediaSource`、命令、组件事件），
+  和句柄侧的类型分开；`events` 模块从此只有**句柄侧**事件（`ErikaEvent`）。
 - **没有媒体时 `play` / `pause` / `seek` / `stop` 统一是安全的 no-op**（不报错）：
   没有片源只是"还没有东西可做"，不是失败。`status.error` 只留给真正的失败
   （`open` 失败、解码 / 音频错误、出帧路径不可用）。其中 `seek` 之前漏了这条 guard，
@@ -32,10 +44,15 @@
 
 ### 新增
 
-- **`nsh_erika::erika_video()`**（组件 `ErikaVideo`）：`erika_video().src(uri).playing(true)`
-  由组件自己建引擎；`erika_video_with(player)` 用外部引擎（挂载时认领票据，卸载即销毁）。
-- **`ErikaVideo` 的 props**：`src` / `bind_player` / `playing` / `muted` / `volume` / `rate`。
-  三种写法都合法：**固定值**（初始配置）、**闭包**（控制端）、**不写**（不干预）。
+- **组件事件 `VideoEvent`**（`nsh_erika::simple`）：`StateChange` / `Progress` / `Ended` /
+  `Buffering` / `TracksChange` / `SelectionChange` / `Error`。每个变体一个监听方法
+  （`.on_progress(...)` 等），全部可选。props 路线没有句柄，事件是它唯一的读出口；
+  挂载时补发一次快照（两个 watch 通道都只报"订阅之后"的变化）。
+- **纯命令口 `command` prop**（`nsh_erika::simple::{CommandRequest, VideoCommand}`）：
+  `Stop` / `Seek` / `SelectAudio` / `SelectSubtitle` / 弹幕开关与增删轨。带自增 token，
+  所以同样的动作也能重复触发。判据是"**有等价 prop 的不进命令**"：播放/暂停、音量、静音、
+  倍速都仍由状态 prop 表达。
+- **`MediaSource`**：`src` prop 的载荷，`From<&str>` / `From<String>` / `From<MediaRequest>`。
 - **未绑定视图的检查**：组件自建引擎时，若注册表里还有从没被任何控件绑定过的会话，
   打一条 info —— 多半是 `ErikaPlayer::new()` 之后忘了 `.bind_player(handle)`。
 - **`ErikaPlayer::open_if_changed`**：同一份请求（uri / 头 / 起始位置）打开过就跳过。
@@ -43,17 +60,19 @@
 ### 修复
 
 - **`volume` 默认值把外部句柄页静音**：随 `Option` 化消失（不写 `volume` 就不发命令）。
-- **挂载时重复 `open`**：以前 body 和 useEffect 各开一次 —— 解码器重建、
+- **挂载时重复 `open`**：以前 body 和 effect 各开一次 —— 解码器重建、
   换片路径还会清掉弹幕轨。现在只有 effect 的第一次运行负责打开。
 - **设置类意图排在 `open` 之前**：避免首帧是满音量（声明式音量上一帧才生效）。
 - 平台层 `source` 收到 `null` 时不再解绑+告警 —— 它现在表示"号还没到"。
 
-### 待办
+### 待办（下一版）
 
-- **组件事件**：状态 / 进度 / 播完 / 错误 —— 纯 props 路线要"读"必须靠它（下一步）。
-- **一次性动作的 props 形状**：`seek` 需要带 token 的请求对象（否则相等比较会吞掉重复请求）。
-- **意图重放**：换片 / `src` 晚到之后要不要接着播。
+- **意图重放**：`src` 晚到 / 换片之后要不要接着播（`playing` 是电平的，值没变就不会重发）。
+- **`Play` / `Reload` 之类的"再来一次"动作**：`Ended` 之后引擎在 `Stopped`，当前命令表里没有
+  能重新起播的项；`open` 失败后也没有重试入口。
 - **创建期配置**（builder）：渲染后端、音频环、队列容量 —— 运行期改不了的那几项。
+- **选轨搬成状态 prop**（`selected`）：它现在在命令里，因为还没有等价 prop。
+- **章节事件 / 外挂字幕命令 / 弹幕样式**：还没做。
 
 ## [0.2.0] - 2026-11-18
 

@@ -29,15 +29,19 @@ view()
 根上只留"每个 app 都要手写"的几个名字，其余按**屏幕上的关注点**分模块（内部的 `core::`
 永远私有，模块只是出口）。
 
+**简化模式（只用 props）的全部出口在 `simple` 一个模块里**，根上的名字是给句柄 / 注册用的。
+
 | 你要的东西 | 路径 |
 |---|---|
-| 播放器 / 画面 / 注册 / 控件名 | `nsh_erika::{ErikaPlayer, erika_video, erika_video_with, register, COMPONENT_NAME, PlatformComponents}` |
+| **简化模式的入口**（画面 / props） | `nsh_erika::{erika_video, ErikaVideo, ErikaVideoProps}` |
+| **简化模式的数据结构**（`src` 载荷 / 命令 / 事件） | `nsh_erika::simple::*`（`MediaSource`、`CommandRequest`、`VideoCommand`、`VideoEvent`、`VideoState`、`VideoProgress`、`VideoTrack` …） |
+| 播放器句柄 / 注册 / 控件名 / **画面（句柄路线）** | `nsh_erika::{ErikaPlayer, erika_video_for, register, COMPONENT_NAME, PlatformComponents}` |
 | 打开媒体的请求、播放状态 | `nsh_erika::{MediaRequest, PlayerState}`（高频，特意留在根上） |
 | 弹幕：句柄 + 快照 + 五组样式 | `nsh_erika::danmaku::*` |
 | 字幕：句柄 + 快照 + 外观 / 版面 / 延迟 | `nsh_erika::subtitle::*` |
 | 轨道：列表 / 选择 / 外挂字幕 | `nsh_erika::tracks::*` |
 | 状态快照 `ErikaStatus` / `ErikaProgress` | `nsh_erika::state::*` |
-| 事件 `ErikaEvent` + 三个 Listener | `nsh_erika::events::*` |
+| **句柄侧**事件 `ErikaEvent` + 三个 Listener | `nsh_erika::events::*` |
 | 会话 / 帧（只有自写控件才用） | `nsh_erika::video::*` ← **需要 `escape-hatch` feature** |
 | **其它一切上游类型** | `nsh_erika::erika::…`（全量兜底） |
 
@@ -71,7 +75,7 @@ nsh-erika = { path = "…", features = ["escape-hatch"] }
 不承诺"：上游类型照样能从 `nsh_erika::erika::…` 摸到，我们自己的那几个（`ErikaSession`
 等）才真的不导出。
 
-对 99% 的应用来说，正确的做法一直是 `erika_video_with(player)`（= `erika_video().bind_player(player)`）
+对 99% 的应用来说，正确的做法一直是 `erika_video_for(player)`（= `erika_video().bind_player(player)`）
 —— 那条路不需要这个 feature。
 
 ---
@@ -127,16 +131,18 @@ fn components_windows(components: &PlatformComponents) { nsh_erika::register(com
 nsh_erika::erika_video().src(uri).playing(true).volume(0.8)
 
 // ② 要句柄控制：把句柄交出去，组件挂载时认领它
-nsh_erika::erika_video_with(player.clone())   // = erika_video().bind_player(player.clone())
+nsh_erika::erika_video_for(player.clone())   // = erika_video().bind_player(player.clone())
 ```
 
+- `src` 接受 `&str` / `String` / `MediaRequest`：需要 HTTP 头（鉴权 / Cookie）或中途续播时，
+  用 builder 构造好再传 —— `erika_video().src(MediaRequest::new(url).with_http_headers(headers))`。
 - `bind_player` 的参数是 `impl Into<Prop<Option<ErikaPlayer>>>`：给 `player` 或 `player.clone()` 都行，
   **`&player` 不行**。
 - 返回的是普通 NSH 元素，`.flex_1()` 之类的样式照常链式调用。
 - 组件内部把句柄换成一个号、生成 `native("erika.video")` 元素、把号挂到 `source` prop 上。
   **手写 `native(...)` 走不通**：号是 `pub(crate)` 的，`erika_video()` 是唯一入口。
 
-**props 的三种写法**（`src` / `bind_player` / `playing` / `muted` / `volume` / `rate`）：
+**props 的三种写法**（`src` / `bind_player` / `playing` / `muted` / `volume` / `rate` / `command`）：
 
 | 写法 | 含义 |
 |---|---|
@@ -180,6 +186,39 @@ player.set_rate(1.5);                 // 倍速
 | `http_headers` | HTTP 头（`Authorization`、Cookie…；`Debug` 刻意不打印它们） |
 | `http_read_ahead_bytes` / `http_back_buffer_bytes` | HTTP 预读与回退缓存（`None` = 引擎默认） |
 | `start_position` | 打开后立刻定位到哪（片头跳过、续播） |
+
+---
+
+## 命令（props 路线的"动作口"）
+
+对外只暴露三样东西：**状态**（props）、**事件**（`on_*`）、**命令**（`command`）。
+判据只有一条：**能回读的才配当状态**。
+
+| 东西 | 归属 | 理由 |
+|---|---|---|
+| `src` / `playing` / `volume` / `muted` / `rate` | 状态 prop | 引擎持有，挂载/重开要能恢复 |
+| `seek` / 停播 / 弹幕开关 / 加删弹幕轨 / 选轨 … | **命令** | 没有等价 prop，也没有"当前值"可读 |
+
+规则：**有等价 prop 的动作一律不进命令** —— 播放/暂停用 `playing`，音量/静音/倍速用
+`volume` / `muted` / `rate`。命令只留给"没有状态可表达"的动作。
+
+```rust
+use nsh_erika::simple::{CommandRequest, VideoCommand};
+
+// 每次动作**新建**一个 request（它带自增 token，所以同样的动作再来一次也生效）
+let command = signal(Option::<CommandRequest>::None);
+button().on_press(move || {
+    command.set(Some(CommandRequest::new(VideoCommand::Seek(Duration::from_secs(30)))))
+});
+erika_video().src(uri).command(move || command.get())
+```
+
+- **边沿触发**：`command` prop 变了才执行；重复设置同一个值不会再次触发 —— 要重复就再 `new` 一个。
+- **挂载时执行一次**：组件重挂 = 新引擎，所以重放当前值通常是你要的。
+- **没有返回值**：失败进 `status.error`（句柄路线）或 `VideoEvent::Error`。
+- ⚠️ `SelectAudio` / `SelectSubtitle` 需要已有媒体；还没打开时会被忽略（打 debug 日志）。
+  等 `StateChange` 到 `Ready` 之后再发。
+- ⚠️ 别在组件 body 里现造 request：每次重渲染都会发一条。放在事件处理器里。
 
 ---
 
@@ -304,7 +343,7 @@ player.tracks().remove_subtitle(track_id);
 | 用法 | 引擎谁建 | 控制 | 关机 |
 |---|---|---|---|
 | `erika_video().src(uri)`（纯 props） | 组件（挂载时同步建） | 只能 props | 组件 |
-| `ErikaPlayer::new()` + `erika_video_with(p)` | 页面（`new()` 那一刻） | 句柄全能力 | 组件（挂载时**认领票据**后） |
+| `ErikaPlayer::new()` + `erika_video_for(p)` | 页面（`new()` 那一刻） | 句柄全能力 | 组件（挂载时**认领票据**后） |
 | `ErikaSession::create()` + `session.player()`（**逃生舱**） | 你自己 | 借用句柄 | 你自己（守卫 `Drop`） |
 
 "认领"就是 `ErikaPlayer::new()` 在句柄里放的那张**所有权票据**：组件挂载时取走它、放进自己的

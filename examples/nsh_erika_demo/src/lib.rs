@@ -7,7 +7,7 @@
 //! |---|---|---|---|
 //! | ① 生命周期 | `ErikaPlayer::new()`（页面建） | ❌ 只有「返回」 | **进出页面 = 建/销引擎**（首页有线程数读数） |
 //! | ② 外部句柄 | 同上 | ✅ 句柄方法 | 全能力控制：播放/seek/音量/静音/停止 + 进度与事件订阅 |
-//! | ③ 内部自建 | `erika_video().src(uri)`（组件建） | ✅ 只走 props | 纯声明式：`playing` / `volume` / `muted` / `rate` 控制 + `on_progress` / `on_ended` 读回 |
+//! | ③ 内部自建 | `erika_video().src(uri)`（组件建） | ✅ 只走 props | 纯声明式：`playing` / `volume` / `muted` / `rate` 控制 + `on_progress` / `on_ended` 读回 + `command` 做 seek |
 //!
 //! 三个页面都是**独立组件**，所以「进入 = 建实例」「返回 = 实例销毁」。引擎的生死：
 //!
@@ -27,6 +27,7 @@ use std::time::Duration;
 use nsh_base::{button, theme};
 
 use nsh_core::prelude::*;
+use nsh_erika::simple::{CommandRequest, VideoCommand};
 use nsh_erika::{PlatformComponents, PlayerState, events::ErikaEvent};
 
 /// The app's UI set (`nsh.json` `"rust"`): what a TSX entry may import from
@@ -359,7 +360,7 @@ pub fn ExternalPage() -> impl IntoElement {
     // 页面自己 open + play + 挂弹幕：所以**不传 `src`**（组件不该再开一遍 —— 换片那条
     // 路径会清掉弹幕轨），也不写 `playing`（不干预）。画面只负责显示。
     root.child(
-        nsh_erika::erika_video_with(player).flex_1(),
+        nsh_erika::erika_video_for(player).flex_1(),
     )
     .child(
         bar()
@@ -416,6 +417,8 @@ pub fn InternalPage() -> impl IntoElement {
     let position = signal(Duration::ZERO);
     let duration = signal(Option::<Duration>::None);
     let ended = signal(false);
+    // 纯命令：没有"当前值"可读的动作走这里（每次都要新建 request，token 让它能重复触发）。
+    let command = signal(Option::<CommandRequest>::None);
     let muted = signal(false);
     let volume = signal(1.0_f32);
     // 倍速在 0.5 / 1 / 1.5 / 2 之间循环
@@ -458,11 +461,12 @@ pub fn InternalPage() -> impl IntoElement {
             .muted(move || muted.get())
             .volume(move || volume.get())
             .rate(move || rate.get())
-            .on_progress(move |progress: &nsh_erika::events::VideoProgress| {
+            .on_progress(move |progress: &nsh_erika::simple::VideoProgress| {
                 position.set(Duration::from_millis(progress.position_ms));
                 duration.set(progress.duration_ms.map(Duration::from_millis));
             })
             .on_ended(move || ended.set(true))
+            .command(move || command.get())
             .flex_1(),
     )
     .child(
@@ -477,6 +481,22 @@ pub fn InternalPage() -> impl IntoElement {
                 },
                 toggle_playing,
             ))
+            .child(tap(|| "-10s".to_string(), {
+                let command = command;
+                move || {
+                    command.set(Some(CommandRequest::new(VideoCommand::Seek(
+                        position.get().saturating_sub(Duration::from_secs(10)),
+                    ))))
+                }
+            }))
+            .child(tap(|| "+10s".to_string(), {
+                let command = command;
+                move || {
+                    command.set(Some(CommandRequest::new(VideoCommand::Seek(
+                        position.get() + Duration::from_secs(10),
+                    ))))
+                }
+            }))
             .child(tap(|| "音量 -".to_string(), quieter))
             .child(tap(|| "音量 +".to_string(), louder))
             .child(tap(

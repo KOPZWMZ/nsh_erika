@@ -40,7 +40,7 @@
 //!
 //! ```text
 //! ┌ 元素层 component/ —— 画面元素;引擎的创建 / 认领 / 关机都在这里 ────────┐
-//! │ component.rs  `ErikaVideo`（组件）+ `erika_video()` / `erika_video_with()` │
+//! │ component.rs  `ErikaVideo`（组件）+ `erika_video()` / `erika_video_for()` │
 //! │ props.rs      `ErikaVideoProps`：意图 → 命令（`apply`）+ 挂载时的初值     │
 //! └──────────────────────────────────────────────────────────────────────┘
 //! ┌ 内核层 core/ —— 不认识任何 UI 框架，也不认识 gtk / D2D ──────────────┐
@@ -86,9 +86,10 @@
 //! ```no_run
 //! # use nsh_core::prelude::*;
 //! # fn page() -> impl IntoElement {
+//! use nsh_erika::erika_video;
 //! let volume = signal(0.8_f32);
 //! view().flex_1().child(
-//!     nsh_erika::erika_video()
+//!     erika_video()
 //!         .src("/path/to/video.mkv")
 //!         .playing(true)                  // 固定值 = 初始配置（不写 = 不干预）
 //!         .volume(move || volume.get())   // 闭包 = 控制端；引擎由组件建，也由它销毁
@@ -168,7 +169,7 @@ pub(crate) use windows as backend;
 
 // ──────────────────────────── 公开面（改之前先读）────────────────────────────
 //
-// 规则三条:
+// 规则五条:
 //
 //   1. **根上只留"每个 app 都要手写"的**:建播放器 / 挂画面 / 注册控件 / 打开媒体 /
 //      判断状态。就这几个,别再加。
@@ -177,7 +178,9 @@ pub(crate) use windows as backend;
 //      永远私有,这些只是出口(纯 `pub use`,不改内部结构)。
 //   3. **上游类型一律走 `nsh_erika::erika::…`**;只有"出现在我们公开字段 / 参数里"的
 //      才在对应模块就地再放一份 —— 让写面板的人不用在两个命名空间之间来回跳。
-//   4. **逃生舱挂到 `escape-hatch` feature 下,默认不导出**(见 `video` 模块与
+//   4. **简化模式（props 路线）的东西只从 `simple` 出**,不在根上散落:画面元素、props、
+//      `MediaSource`、命令、组件事件。根上是"句柄 / 注册"的地盘,两边不混。
+//   5. **逃生舱挂到 `escape-hatch` feature 下,默认不导出**(见 `video` 模块与
 //      `ErikaSession` / `ErikaPlayer::{view, call, call_with, raw}`)。
 //      判据:它出现在首页就是"错误的邀请"。
 //
@@ -225,20 +228,44 @@ pub mod state {
     pub use ::erika::TrackSelection;
 }
 
-/// 事件流。两套：句柄侧的 [`ErikaEvent`](crate::events::ErikaEvent)（上游离散事件的转发 +
-/// 三条订阅出口），组件侧的 [`VideoEvent`](crate::events::VideoEvent)（无句柄页面也能收到
-/// 状态 / 进度 / 播完 / 错误）。
-pub mod events {
+/// **简化模式独有的数据类型**：`MediaSource`（`src` 的载荷）、命令、组件事件。
+///
+/// 入口本身在根上：[`erika_video()`](crate::erika_video) / [`ErikaVideo`](crate::ErikaVideo)。
+/// 这里只收"用简化模式时需要 import 的数据结构"，和句柄侧的类型分开，免得混在一张列表里。
+///
+/// ```ignore
+/// use nsh_erika::erika_video;
+/// use nsh_erika::simple::{CommandRequest, VideoCommand, VideoProgress};
+///
+/// let command = signal(None::<CommandRequest>);
+/// view().child(
+///     erika_video()
+///         .src(uri)
+///         .playing(true)
+///         .command(move || command.get())
+///         .on_progress(move |p: &VideoProgress| …),
+/// )
+/// ```
+pub mod simple {
+    pub use crate::component::command::{CommandRequest, VideoCommand};
     pub use crate::component::events::{
         SelectedTracks, VideoEvent, VideoProgress, VideoState, VideoTrack, VideoTrackKind,
     };
+    pub use crate::component::media::MediaSource;
+}
+
+/// 句柄侧的事件流：上游离散事件的转发 + 三条订阅出口。
+///
+/// 组件侧（props 路线）的事件在 [`simple::VideoEvent`](crate::simple::VideoEvent)。
+pub mod events {
     pub use crate::core::listener::{
         ErikaEvent, ErikaEventsListener, ErikaListener, ErikaProgressListener, ErikaStatusListener,
     };
     pub use ::erika::{PlayerState, TrackSelection};
 }
 
-/// 帧源与帧载荷：**自写控件 / 出帧自检**才用，普通应用用 [`ErikaVideo`](crate::ErikaVideo)。
+/// 帧源与帧载荷：**自写控件 / 出帧自检**才用，普通应用用
+/// [`ErikaVideo`](crate::ErikaVideo)。
 #[cfg(feature = "escape-hatch")]
 pub mod video {
     pub use crate::core::source::{FrameImage, FrameRequest, ViewSource};
@@ -258,14 +285,14 @@ pub use nsh_platform_windows::Components as PlatformComponents;
 pub use ::erika::MediaRequest;
 /// 播放状态机的 8 个态。上游类型，根上留一份高频的（`match` 事件时天天写）。
 pub use ::erika::PlayerState;
-pub use component::{
-    ErikaVideo, ErikaVideoElement, ErikaVideoProps, erika_video, erika_video_with,
-};
+/// 画面元素与两个构造器：**`erika_video()` = 简化模式**（组件自己建/管引擎），
+/// **`erika_video_for(player)` = 句柄模式**（你给它一台引擎）。
+pub use component::{ErikaVideo, ErikaVideoElement, ErikaVideoProps, erika_video, erika_video_for};
 pub use core::player::ErikaPlayer;
 /// 会话守卫：**引擎的唯一所有者**，`Drop` 即关机。**只在 `escape-hatch` 下导出。**
 ///
 /// 正常用法**拿不到它** —— 有组件时，守卫由 [`ErikaPlayer::new`] 装进句柄的票据、
-/// 再由组件在挂载时 [`adopt`](ErikaVideo) 认领。它出现在这里，是给"没有 UI 的场景"用的：
+/// 再由组件在挂载时 [`adopt`](crate::ErikaVideo) 认领。它出现在这里，是给"没有 UI 的场景"用的：
 /// 集成测试、无头脚本、出帧自检。
 ///
 /// ```ignore
@@ -282,7 +309,7 @@ pub(crate) use crate::core::session::ErikaSession as SessionOwner;
 
 /// 原生控件名。
 ///
-/// 一般不用直接写：用 [`ErikaVideo`]（`nsh_erika::erika_video().src(uri)`）就够了 ——
+/// 一般不用直接写：用 [`ErikaVideo`](crate::ErikaVideo)（`nsh_erika::erika_video().src(uri)`）就够了 ——
 /// `source` 号（`player.session_id()`）由组件自己写上去。
 pub const COMPONENT_NAME: &str = "erika.video";
 

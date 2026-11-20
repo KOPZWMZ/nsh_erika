@@ -1,5 +1,7 @@
 use nsh_core::prelude::*;
 
+use super::command::{CommandRequest, dispatch};
+use super::media::MediaSource;
 use crate::ErikaPlayer;
 /// 画面的 props。
 ///
@@ -7,7 +9,7 @@ use crate::ErikaPlayer;
 ///
 /// | prop | 方向 | 说明 |
 /// |---|---|---|
-/// | `src` | 进 | 片源；空串 = 没有媒体（黑屏，什么都不做）；变了才 `open` |
+/// | `src` | 进 | 片源（`&str` / `String` / `MediaRequest` 都行）；空 uri = 没有媒体；变了才 `open` |
 /// | `bind_player` | 进 | 句柄；挂载时认领所有权票据，外部照样可以自己 `open` / 控制 |
 /// | `playing` | 进 | 播 / 暂停意图；**不写** = 不干预（**不会自动播**，交给句柄或调用方决定） |
 /// | `muted` / `volume` / `rate` | 进 | 引擎设置；**不写** = 不干预（用引擎默认值） |
@@ -29,9 +31,12 @@ pub struct ErikaVideoProps {
     /// 句柄：组件挂载时认领它的所有权票据。不给 = 组件自己建引擎。
     #[prop(default)]
     pub bind_player: Prop<Option<ErikaPlayer>>,
-    /// 片源。空串 = 没有媒体（引擎照样建，只是没东西可放）。
+    /// 片源。空 uri = 没有媒体（引擎照样建，只是没东西可放）。
+    ///
+    /// `.src(..)` 接受 `&str` / `String` / [`MediaRequest`](crate::MediaRequest)：
+    /// 需要 HTTP 头（鉴权 / Cookie）或中途续播时，用 `MediaRequest` 的 builder 构造后再传。
     #[prop(default)]
-    pub src: Prop<String>,
+    pub src: Prop<MediaSource>,
     /// 播 / 暂停意图。不写 = 不干预（既不播也不暂停）。
     #[prop(default)]
     pub playing: Prop<Option<bool>>,
@@ -44,6 +49,12 @@ pub struct ErikaVideoProps {
     /// 倍速（> 0；非法值会被 `set_rate` 丢掉）。不写 = 不干预。
     #[prop(default)]
     pub rate: Prop<Option<f64>>,
+    /// 纯命令（一次性动作）：`seek` / 弹幕开关 / 选轨 / 加减弹幕轨…
+    ///
+    /// 每次动作都要新建一个 [`CommandRequest`](crate::simple::CommandRequest)（它带自增 token），所以"同一个位置连点两次"
+    /// 也会生效。**在事件处理器里造、塞进 signal**，别在组件 body 里现造。
+    #[prop(default)]
+    pub command: Prop<Option<CommandRequest>>,
 }
 impl ErikaVideoProps {
     /// 挂载时的**设置类**意图：必须排在片源 `open` 前面，否则首帧是满音量 / 默认样式。
@@ -71,9 +82,9 @@ impl ErikaVideoProps {
         effect({
             let p = player.clone();
             move || {
-                let uri = self.src.get();
-                if !uri.is_empty() {
-                    p.open(crate::MediaRequest::new(uri));
+                let source = self.src.get();
+                if !source.is_empty() {
+                    p.open(source.into_request());
                 }
             }
         });
@@ -106,6 +117,15 @@ impl ErikaVideoProps {
             move || {
                 if let Some(rate) = self.rate.get() {
                     p.set_rate(rate)
+                }
+            }
+        });
+        // 纯命令放最后：前面几条 effect 已经把 open / 设置类入了队，命令看到的是同一个顺序。
+        effect({
+            let p = player.clone();
+            move || {
+                if let Some(request) = self.command.get() {
+                    dispatch(&p, request.command().clone());
                 }
             }
         });

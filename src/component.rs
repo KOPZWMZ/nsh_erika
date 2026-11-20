@@ -5,7 +5,9 @@ use nsh_core::prelude::*;
 use crate::COMPONENT_NAME;
 use crate::ErikaPlayer;
 use crate::SessionOwner;
+pub(crate) mod command;
 pub(crate) mod events;
+pub(crate) mod media;
 pub use events::VideoEvent;
 mod props;
 pub use props::ErikaVideoProps;
@@ -15,10 +17,10 @@ pub use props::ErikaVideoProps;
 /// // ① 只给 src：组件自己建引擎，控制全走 props
 /// erika_video().src(uri).playing(true)
 ///
-/// // ② 给一台外部引擎：两种写法等价（`erika_video_with` 更一眼看出"给的是引擎"）
+/// // ② 给一台外部引擎：`erika_video_for` 更一眼看出"给的是引擎"
 /// let player = ErikaPlayer::new()?;                     // 引擎此刻就在
 /// erika_video().src(uri).bind_player(player.clone())
-/// erika_video_with(player)
+/// erika_video_for(player)
 /// ```
 ///
 /// | 给了什么 | 引擎谁建 | 控制 | 关机 |
@@ -74,16 +76,18 @@ pub fn ErikaVideo(props: ErikaVideoProps, cx: Scope<VideoEvent>) -> impl IntoEle
 }
 /// 用一台**外部引擎**做画面的简写：等价于 `erika_video().bind_player(player)`。
 ///
+/// 名字读作"给这个 player 一块画面" —— 它属于**句柄路线**（你已经有一个引擎了）。
+///
 /// 和链式写法比，它的用处是让调用点一眼看出"这不是控制，而是把一台引擎交给画面"：
 ///
 /// ```ignore
 /// let player = ErikaPlayer::new()?;   // 引擎此刻就在，句柄全能力
-/// view().child(erika_video_with(player).flex_1())
+/// view().child(erika_video_for(player).flex_1())
 /// ```
 ///
 /// 组件挂载时**认领**这张所有权票据，从此卸载即销毁；返回的元素和 `erika_video()`
 /// 完全一样，样式照常链式调用。
-pub fn erika_video_with(player: ErikaPlayer) -> ErikaVideoElement {
+pub fn erika_video_for(player: ErikaPlayer) -> ErikaVideoElement {
     erika_video().bind_player(player)
 }
 

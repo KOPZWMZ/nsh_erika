@@ -28,7 +28,7 @@
 [dependencies]
 nsh-core = "0.6"
 nsh-base = "0.6"                    
-nsh-erika = { git = "https://github.com/KOPZWMZ/nsh_erika", tag = "v0.2.0" }
+nsh-erika = { git = "https://github.com/KOPZWMZ/nsh_erika", tag = "v0.3.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = { version = "0.6", default-features = false }
@@ -85,7 +85,7 @@ player.play();
 view()
     .flex_col()
     .flex_1()
-    .child(nsh_erika::erika_video_with(player.clone()).flex_1())
+    .child(nsh_erika::erika_video_for(player.clone()).flex_1())
     .child(button().on_press({
         let player = player.clone();
         move || player.pause()
@@ -101,7 +101,7 @@ nsh_erika::erika_video().src(uri).playing(true).volume(0.8)
 
 `playing` / `muted` / `volume` / `rate` 不写 = **不干预**（用引擎默认值，`playing` 不写不会自动播）。
 
-**路径**：根上只有"每个 app 都要手写"的几个（`ErikaPlayer` / `erika_video` / `erika_video_with` /
+**路径**：根上只有"每个 app 都要手写"的几个（`ErikaPlayer` / `erika_video` / `erika_video_for` /
 `register` / `COMPONENT_NAME` / `PlatformComponents` / `MediaRequest` / `PlayerState`）；其余按关注点分模块：
 `danmaku::` `subtitle::` `tracks::` `state::` `events::` `video::`（`video` 是逃生舱，需要
 `escape-hatch` feature）。上游类型走
