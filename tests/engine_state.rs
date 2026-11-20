@@ -53,8 +53,13 @@ fn play_without_media_is_a_no_op() {
 fn seek_stop_pause_without_media_are_noops() {
     let s = session(&LOCK);
 
-    // 这四种操作在"没有媒体"时都必须是安全的 no-op ——
-    // 它们都可能被 UI 在任意时刻触发（比如组件卸载、快捷键）。
+    // 这一族在"没有媒体"时都必须是安全的 no-op —— 它们都可能被 UI 在任意时刻触发
+    // （组件挂载时的声明式意图、组件卸载、快捷键）。
+    //
+    // **而且不许写 error**：没有片源只是"还没有东西可做"，不是失败。
+    // `status.error` 只留给真正的失败（open 失败、解码 / 音频错误、出帧路径不可用）——
+    // 曾经 `seek` 这一条漏了 guard，会把 "no media is open" 写进 status，
+    // 挂载期的声明式意图一覆盖，真正的原因就看不见了。
     s.player.seek(Duration::from_secs(5));
     s.player.stop();
     s.player.pause();
@@ -66,4 +71,10 @@ fn seek_stop_pause_without_media_are_noops() {
 
     assert!(!s.player.is_playing(), "没有媒体时不该进到 playing 状态");
     assert!(!s.player.has_media(), "这些操作不该凭空变出媒体");
+    assert_eq!(s.player.state(), PlayerState::Idle, "状态不该被弄乱");
+    assert!(
+        s.player.last_error().is_none(),
+        "无媒体的命令不该写 error: {:?}",
+        s.player.last_error()
+    );
 }

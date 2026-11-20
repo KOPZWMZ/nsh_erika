@@ -34,8 +34,12 @@
 
 ### 修复
 
-- `Play` / `Pause` 在**没有媒体**时不再报错（对齐 `stop()` 的口径）：声明式的 `paused`
-  prop 会在 `open()` 之前到达，那不是错误。
+- **没有媒体时 `play` / `pause` / `seek` / `stop` 统一是安全的 no-op**（不报错）：
+  没有片源只是"还没有东西可做"，不是失败。`status.error` 只留给真正的失败
+  （`open` 失败、解码 / 音频错误、出帧路径不可用）—— 声明式的 `paused` prop 会在
+  `open()` 之前到达，把它当错误报等于每个纯 props 页面挂载时先报一次错，
+  还会把真正的失败（`open: No such file` 之类）覆盖掉。
+  其中 `seek` 之前漏了这条 guard，会往 `status.error` 写一句 `no media is open`。
 - 平台层 `source` 收到 `null` 时不再解绑+告警 —— 它现在表示"号还没到"。
 
 ## [0.2.0] - 2026-11-18

@@ -59,12 +59,27 @@ fn main() {
     println!("① 新建:state={:?}", player.state());
     assert_eq!(player.state(), PlayerState::Idle);
 
-    println!("② 没有媒体就 play —— 不该 panic,但错误要能被看到");
+    println!("② 没有媒体就 play / seek / pause / stop —— 都是安全的 no-op,**不报错**");
+    // 口径(2026-11-20 定稿):没有片源只是"还没有东西可做",不是失败。
+    // 把正常时序当错误报给用户,等于每个纯 props 的页面挂载时都先报一次错;
+    // 而且它会覆盖掉真正的失败(open: No such file 之类)。
+    // `status.error` 只装真正的失败:open 失败、解码 / 音频错误、出帧路径不可用。
     player.play();
-    // 引擎线程还在建 presenter(要建自己的 wgpu device),所以这里等它把错误写出来
-    wait(&player, |p| p.last_error().is_some(), "无媒体 play 报错");
-    println!("  err={:?}", player.last_error());
-    assert_eq!(player.state(), PlayerState::Idle, "报错不该把状态弄乱");
+    player.seek(Duration::from_secs(5));
+    player.pause();
+    player.stop();
+    // 引擎线程还在建 presenter(要建自己的 wgpu device),给它一轮机会
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        player.last_error().is_none(),
+        "无媒体的命令不该报错: {:?}",
+        player.last_error()
+    );
+    assert_eq!(
+        player.state(),
+        PlayerState::Idle,
+        "无媒体的命令不该把状态弄乱"
+    );
 
     println!("③ open 后应到 Ready(但不自动播)");
     // 在**首次** open 之前挂一条弹幕轨:队列保序,这是合法写法(demo 就这么写)。

@@ -5,6 +5,7 @@
 //! 所以这一族**没有一条**能直连 `erika::Player`(实测直连就会音画不同步)。
 
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use actor_lite::ActorContext;
 use erika::MediaRequest;
@@ -22,7 +23,7 @@ impl ErikaEngine {
             PlaybackCmd::Stop => self.stop(ctx),
             PlaybackCmd::Play => self.play_or_pause(ctx, true),
             PlaybackCmd::Pause => self.play_or_pause(ctx, false),
-            PlaybackCmd::Seek(pos) => self.control(ctx, "seek", move |p| p.seek(pos)),
+            PlaybackCmd::Seek(pos) => self.seek(pos, ctx),
         }
     }
 
@@ -100,6 +101,18 @@ impl ErikaEngine {
                 format!("{}: {e}", if playing { "play" } else { "pause" }),
             ),
         }
+    }
+    /// 跳转。
+    ///
+    /// **没媒体时什么都不做、不报错** —— 和 `play_or_pause` / `stop` 同一条口径:
+    /// 没有片源只是"还没有东西可做",不是失败。`status.error` 留给真正的失败
+    /// (open 失败、解码 / 音频错误、出帧路径不可用);否则组件挂载时那条声明式意图
+    /// 会把它覆盖成一句 "no media is open",真正的原因反而看不见了。
+    fn seek(&mut self, position: Duration, ctx: &ActorContext<Self>) {
+        if !self.presenter.player().has_open_media() {
+            return;
+        }
+        self.control(ctx, "seek", move |p| p.seek(position));
     }
     /// 停播。状态由 erika 自己维护:停完是 `PlayerState::Stopped`,而**媒体仍然开着**
     /// (`has_open_media()` 为 true、`duration` 还在、位置归 0)。
