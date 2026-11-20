@@ -270,10 +270,11 @@ impl Request {
 /// 它由号空间（`core::registry`）按号保管 —— 会话创建时登记、销毁时摘表。
 #[derive(Clone)]
 pub struct ViewSource {
-    id: u64, // PartialEq / 解绑判重用
+    id: u64,
     frames: Arc<FrameSlot>,
     request: Arc<Request>,
     engine: ActorHandle<ErikaEngine>,
+    bound: Arc<AtomicBool>,
 }
 
 impl ViewSource {
@@ -288,6 +289,7 @@ impl ViewSource {
             frames,
             request,
             engine,
+            bound: Arc::new(AtomicBool::new(false)),
         }
     }
     /// 引擎还在不在跑。`ErikaSession::drop` 之后变 `false` —— 帧回调据此收工。
@@ -297,7 +299,13 @@ impl ViewSource {
 
     /// 按 `source` 号找回视图侧。控件专用：号无效（从没注册 / 会话已销毁）时返回 `None`。
     pub(crate) fn resolve(id: u64) -> Option<Self> {
-        crate::core::registry::resolve(id)
+        let source = crate::core::registry::resolve(id)?;
+        source.bound.store(true, Ordering::Relaxed); // 克隆共享同一个 Arc，注册表里那份也变了
+        Some(source)
+    }
+
+    pub(crate) fn is_bound(&self) -> bool {
+        self.bound.load(Ordering::Relaxed)
     }
 
     /// 视频原始宽高比（没打开 / 没有视频轨时为 `None`）。控件用它算内接矩形。

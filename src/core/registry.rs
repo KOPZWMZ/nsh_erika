@@ -71,3 +71,14 @@ pub(crate) fn resolve(id: u64) -> Option<ViewSource> {
     let table = table().lock().ok()?;
     table.get(&id).cloned()
 }
+// 所有**从没被平台控件绑定过**的会话号（`except` 排除调用者自己）。
+/// 组件自建引擎时用它回答"是不是还有一台引擎没有画面"。
+pub(crate) fn unbound_except(except: u64) -> Vec<u64> {
+    table()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .filter(|(id, v)| **id != except && !v.is_bound())
+        .map(|(id, _)| *id)
+        .collect::<Vec<_>>()
+}

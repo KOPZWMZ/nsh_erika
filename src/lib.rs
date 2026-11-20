@@ -366,7 +366,7 @@ pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
         },
     };
     let _keep = owned.map(stored);
-
+    check_unbound(&player);
     // 片源：body 里开一次，之后 `src` 变了再开（同一个值不会重复打开）。
     // 变回空串只是"不再换片"，不会关掉已经开着的媒体。
     let opened = props.src.get();
@@ -412,4 +412,16 @@ pub fn ErikaVideo(props: ErikaVideoProps) -> impl IntoElement {
     native(COMPONENT_NAME)
         .prop("source", JsonValue::from(player.session_id()))
         .into_element()
+}
+fn check_unbound(player: &ErikaPlayer) {
+    let me = player.session_id();
+    let orphans = crate::core::registry::unbound_except(me);
+    if !orphans.is_empty() {
+        log::info!(
+            "erika.video: 本进程还有 {} 台引擎没有任何画面绑定：{orphans:?}（这台是 #{me}）。\
+         如果你本来就要纯声明式的多路画面、或画面稍后才挂，忽略这条；\
+         否则检查是不是 `ErikaPlayer::new()` 之后忘了 `.player(handle)`。",
+            orphans.len()
+        );
+    }
 }

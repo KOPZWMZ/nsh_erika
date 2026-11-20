@@ -183,7 +183,7 @@ pub struct ErikaProgress {
 ///
 /// - `Clone` 很便宜：几个 `Arc` 各加一，可以随便传、可以跨线程用；
 /// - `PartialEq` **比号**（号单调递增、永不复用），所以能直接放进 `signal()` 比 props 变没变；
-/// - 平台控件拿到的只是它的**视图侧**（[`ViewSource`](crate::video::ViewSource)），不是它本身。
+/// - 平台控件拿到的只是它的**视图侧**（`video::ViewSource`，需 `escape-hatch`），不是它本身。
 ///
 /// ## 谁负责关机
 ///
